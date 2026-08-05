@@ -1,0 +1,181 @@
+# =============================================================================
+# datascience-projects — .gitignore raiz do monorepo
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# Ambientes virtuais Python (isolados por projeto)
+# -----------------------------------------------------------------------------
+.venv/
+.venv_*/
+venv/
+env/
+ENV/
+.python-version
+
+# -----------------------------------------------------------------------------
+# Python bytecode e artefatos
+# -----------------------------------------------------------------------------
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# -----------------------------------------------------------------------------
+# Empacotamento e distribuição
+# -----------------------------------------------------------------------------
+*.manifest
+*.spec
+pip-log.txt
+pip-delete-this-directory.txt
+
+# -----------------------------------------------------------------------------
+# Testes, cobertura, linters
+# -----------------------------------------------------------------------------
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.nox/
+coverage.xml
+*.cover
+*.py,cover
+.hypothesis/
+.mypy_cache/
+.dmypy.json
+dmypy.json
+.pyre/
+.pytype/
+.ruff_cache/
+
+# -----------------------------------------------------------------------------
+# Jupyter e IPython
+# -----------------------------------------------------------------------------
+.ipynb_checkpoints
+*/.ipynb_checkpoints/*
+profile_default/
+ipython_config.py
+*.nbconvert.ipynb
+
+# -----------------------------------------------------------------------------
+# Dados (nunca versionar dados brutos ou grandes)
+# -----------------------------------------------------------------------------
+# Regra geral: dados ficam fora do Git. Cada projeto documenta como obter.
+**/data/raw/*
+**/data/interim/*
+**/data/processed/*
+**/data/external/*
+# Preservar apenas os placeholders de estrutura
+!**/data/raw/.gitkeep
+!**/data/interim/.gitkeep
+!**/data/processed/.gitkeep
+!**/data/external/.gitkeep
+!**/data/README.md
+
+# Modelos treinados e checkpoints
+**/models/*
+!**/models/.gitkeep
+!**/models/README.md
+*.pkl
+*.joblib
+*.h5
+*.hdf5
+*.pt
+*.pth
+*.onnx
+
+# Arquivos grandes comuns em ciência de dados
+*.csv.gz
+*.parquet
+*.arrow
+*.feather
+*.tif
+*.tiff
+*.geotiff
+*.nc
+*.zarr/
+
+# -----------------------------------------------------------------------------
+# Configurações locais e segredos
+# -----------------------------------------------------------------------------
+.env
+.env.local
+.env.*.local
+*.pem
+*.key
+credentials.json
+secrets.json
+
+# -----------------------------------------------------------------------------
+# Editor / IDE
+# -----------------------------------------------------------------------------
+# VS Code — versionamos apenas configuração compartilhável (settings.json)
+# em cada projeto, se necessário
+.vscode/*
+!.vscode/settings.json
+!.vscode/extensions.json
+!.vscode/launch.json.example
+
+# PyCharm
+.idea/
+
+# Sublime
+*.sublime-project
+*.sublime-workspace
+
+# Vim
+*.swp
+*.swo
+*~
+
+# -----------------------------------------------------------------------------
+# Sistema operacional
+# -----------------------------------------------------------------------------
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+*.lnk
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+
+# Linux
+*~
+.directory
+.Trash-*
+
+# -----------------------------------------------------------------------------
+# Logs e caches diversos
+# -----------------------------------------------------------------------------
+*.log
+logs/
+.cache/
+
+# -----------------------------------------------------------------------------
+# Documentação gerada
+# -----------------------------------------------------------------------------
+docs/_build/
+site/
