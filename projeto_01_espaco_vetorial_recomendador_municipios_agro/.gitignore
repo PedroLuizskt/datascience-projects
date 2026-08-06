@@ -1,0 +1,31 @@
+# =============================================================================
+# projeto_01 — .gitignore específico
+# =============================================================================
+# O .gitignore raiz do monorepo já cobre padrões gerais (Python, VS Code, dados
+# grandes, Windows). Este arquivo adiciona regras específicas deste projeto.
+# =============================================================================
+
+# Ambiente virtual local do projeto
+.venv/
+
+# Downloads brutos da API SIDRA (podem ser regenerados)
+data/raw/*.json
+data/raw/*.csv
+data/raw/*.parquet
+
+# Dados intermediários (regeneráveis a partir de raw)
+data/interim/*.parquet
+data/interim/*.csv
+
+# Dados processados (regeneráveis a partir de interim)
+data/processed/*.parquet
+data/processed/*.csv
+
+# Cache do NLTK (baixado sob demanda)
+nltk_data/
+
+# Cobertura HTML gerada pelo pytest-cov
+reports/coverage/
+
+# Cache do sidrapy
+.sidrapy_cache/
