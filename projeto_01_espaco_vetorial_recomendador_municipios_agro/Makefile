@@ -13,7 +13,8 @@
 # Usuários Windows nativos: use o script tasks.ps1 equivalente. Ver README.
 # =============================================================================
 
-.PHONY: help setup test lint notebook clean clean-data
+.PHONY: help setup test test-network test-all lint notebook \
+        download-loc download-ppm download-all clean clean-data
 
 # Detecção do sistema para escolher o python correto
 ifeq ($(OS),Windows_NT)
@@ -26,12 +27,17 @@ endif
 
 help:
 	@echo "Alvos disponiveis:"
-	@echo "  setup        Cria .venv com Python 3.12 e instala dependencias"
-	@echo "  test         Roda pytest com cobertura"
-	@echo "  lint         Roda ruff (lint + format check)"
-	@echo "  notebook     Sobe o Jupyter Lab"
-	@echo "  clean        Remove __pycache__, .pytest_cache, .ruff_cache"
-	@echo "  clean-data   Remove data/interim/* e data/processed/* (preserva raw)"
+	@echo "  setup             Cria .venv com Python 3.12 e instala dependencias"
+	@echo "  test              Roda pytest sem os testes de rede (default)"
+	@echo "  test-network      Roda apenas os testes de integracao com a API IBGE"
+	@echo "  test-all          Roda TODA a suite, incluindo testes de rede"
+	@echo "  lint              Roda ruff (lint + format check)"
+	@echo "  notebook          Sobe o Jupyter Lab"
+	@echo "  download-loc      Baixa lista de municipios da API Localidades IBGE"
+	@echo "  download-ppm      Baixa PPM tabela 3939 da API SIDRA"
+	@echo "  download-all      Baixa localidades + PPM"
+	@echo "  clean             Remove __pycache__, .pytest_cache, .ruff_cache"
+	@echo "  clean-data        Remove data/interim/* e data/processed/* (preserva raw)"
 
 setup:
 	python3 -m venv .venv
@@ -43,7 +49,22 @@ setup:
 	@echo "                .venv\\Scripts\\Activate.ps1  (Windows)"
 
 test:
+	$(PYTHON) -m pytest tests/ -v -m "not network"
+
+test-network:
+	$(PYTHON) -m pytest tests/ -v -m network
+
+test-all:
 	$(PYTHON) -m pytest tests/ -v
+
+download-loc:
+	$(PYTHON) -m rec_agro_br.dataset localidades
+
+download-ppm:
+	$(PYTHON) -m rec_agro_br.dataset ppm
+
+download-all:
+	$(PYTHON) -m rec_agro_br.dataset all
 
 lint:
 	$(PYTHON) -m ruff check src/ tests/

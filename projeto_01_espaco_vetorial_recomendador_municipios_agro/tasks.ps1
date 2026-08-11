@@ -27,12 +27,17 @@ $Pip = ".\.venv\Scripts\pip.exe"
 
 function Show-Help {
     Write-Host "Alvos disponiveis:"
-    Write-Host "  setup        Cria .venv com Python 3.12 e instala dependencias"
-    Write-Host "  test         Roda pytest com cobertura"
-    Write-Host "  lint         Roda ruff (lint + format check)"
-    Write-Host "  notebook     Sobe o Jupyter Lab"
-    Write-Host "  clean        Remove __pycache__, .pytest_cache, .ruff_cache"
-    Write-Host "  clean-data   Remove data/interim/* e data/processed/*"
+    Write-Host "  setup             Cria .venv com Python 3.12 e instala dependencias"
+    Write-Host "  test              Roda pytest sem os testes de rede (default)"
+    Write-Host "  test-network      Roda apenas os testes de integracao com a API IBGE"
+    Write-Host "  test-all          Roda TODA a suite, incluindo testes de rede"
+    Write-Host "  lint              Roda ruff (lint + format check)"
+    Write-Host "  notebook          Sobe o Jupyter Lab"
+    Write-Host "  download-loc      Baixa lista de municipios da API Localidades IBGE"
+    Write-Host "  download-ppm      Baixa PPM tabela 3939 da API SIDRA"
+    Write-Host "  download-all      Baixa localidades + PPM"
+    Write-Host "  clean             Remove __pycache__, .pytest_cache, .ruff_cache"
+    Write-Host "  clean-data        Remove data/interim/* e data/processed/*"
 }
 
 function Invoke-Setup {
@@ -51,7 +56,27 @@ function Invoke-Setup {
 }
 
 function Invoke-Test {
+    & $Python -m pytest tests/ -v -m "not network"
+}
+
+function Invoke-TestNetwork {
+    & $Python -m pytest tests/ -v -m network
+}
+
+function Invoke-TestAll {
     & $Python -m pytest tests/ -v
+}
+
+function Invoke-DownloadLoc {
+    & $Python -m rec_agro_br.dataset localidades
+}
+
+function Invoke-DownloadPPM {
+    & $Python -m rec_agro_br.dataset ppm
+}
+
+function Invoke-DownloadAll {
+    & $Python -m rec_agro_br.dataset all
 }
 
 function Invoke-Lint {
@@ -86,13 +111,18 @@ function Invoke-CleanData {
 }
 
 switch ($Task) {
-    "help"        { Show-Help }
-    "setup"       { Invoke-Setup }
-    "test"        { Invoke-Test }
-    "lint"        { Invoke-Lint }
-    "notebook"    { Invoke-Notebook }
-    "clean"       { Invoke-Clean }
-    "clean-data"  { Invoke-CleanData }
+    "help"           { Show-Help }
+    "setup"          { Invoke-Setup }
+    "test"           { Invoke-Test }
+    "test-network"   { Invoke-TestNetwork }
+    "test-all"       { Invoke-TestAll }
+    "lint"           { Invoke-Lint }
+    "notebook"       { Invoke-Notebook }
+    "download-loc"   { Invoke-DownloadLoc }
+    "download-ppm"   { Invoke-DownloadPPM }
+    "download-all"   { Invoke-DownloadAll }
+    "clean"          { Invoke-Clean }
+    "clean-data"     { Invoke-CleanData }
     default {
         Write-Host "[ERRO] Alvo desconhecido: $Task"
         Show-Help

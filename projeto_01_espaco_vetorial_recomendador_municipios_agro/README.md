@@ -98,12 +98,30 @@ O projeto está sendo construído em fases progressivas para permitir validaçã
 | Fase | Escopo | Status |
 |------|--------|--------|
 | 1.A | Estrutura, config, testes de sanidade | Concluída |
-| 1.B | Módulo `dataset.py` — download da API SIDRA e da API Localidades | A implementar |
+| 1.B | Módulo `dataset.py` — download da API SIDRA e da API Localidades | Concluída |
 | 1.C | Módulo `features.py` — montagem das "tags" agropecuárias por município | A implementar |
 | 1.D | Módulos `vectorize.py` e `similarity.py` | A implementar |
 | 1.E | Módulo `recommender.py` e notebook principal | A implementar |
 | 1.F | Apostila didática completa | A implementar |
 | 1.G | Extensão de mestrado — validação espacial (Moran's I) | Opcional |
+
+### Novidades da Fase 1.B
+
+O módulo `dataset.py` já está implementado com:
+
+- Download idempotente com cache em disco (arquivo baixado uma vez, lido do disco nas execuções seguintes).
+- Sessão HTTP com retry exponencial para tolerar falhas transientes 5xx do IBGE.
+- Cliente SIDRA injetável, o que permite testes 100% offline.
+- CLI para uso a partir do terminal: `python -m rec_agro_br.dataset {localidades|ppm|all} [--ano N] [--force]`.
+- Suíte pytest ampliada com 30+ testes unitários (sem rede) e 2 testes de integração marcados `@pytest.mark.network` (só rodam com `pytest -m network`).
+
+Para disparar o download real:
+
+```powershell
+.\tasks.ps1 download-all
+```
+
+Os arquivos são gravados em `data/raw/` (JSON bruto da API Localidades e Parquet bruto da PPM) e em `data/interim/` (Parquet achatado das localidades).
 
 ## Aspectos pedagógicos
 

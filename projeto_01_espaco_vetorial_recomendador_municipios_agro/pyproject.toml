@@ -93,12 +93,13 @@ addopts = [
     "--cov=rec_agro_br",
     "--cov-report=term-missing",
     "--cov-report=html:reports/coverage",
+    "-m", "not network",
 ]
 testpaths = ["tests"]
 pythonpath = ["src"]
 markers = [
     "slow: marca testes lentos (excluir com '-m \"not slow\"')",
-    "network: testes que dependem de acesso à internet",
+    "network: testes que dependem de acesso à internet (excluídos por default)",
     "integration: testes de integração ponta a ponta",
 ]
 
