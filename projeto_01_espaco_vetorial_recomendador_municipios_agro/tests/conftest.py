@@ -198,6 +198,151 @@ def fake_sidra_empty() -> FakeSidraEmpty:
 
 
 # =============================================================================
+# Fixtures para features.py (PPM em formato real do sidrapy)
+# =============================================================================
+def _ppm_row(
+    municipio_id: int,
+    municipio_nome_uf: str,
+    tipo_rebanho_cod: str,
+    tipo_rebanho_nome: str,
+    valor: str,
+    ano: str = "2024",
+) -> dict[str, str]:
+    """Constrói uma linha PPM no formato exato do sidrapy header='n'.
+
+    Mapeamento (descoberto empiricamente na Fase 1.B):
+      NC=nível código, NN=nível nome, MC=medida código, MN=medida nome,
+      V=valor, D1=município, D2=ano, D3=variável, D4=tipo de rebanho.
+    """
+    return {
+        "NC": "6",
+        "NN": "Município",
+        "MC": "24",
+        "MN": "Cabeças",
+        "V": valor,
+        "D1C": str(municipio_id),
+        "D1N": municipio_nome_uf,
+        "D2C": ano,
+        "D2N": ano,
+        "D3C": "105",
+        "D3N": "Efetivo dos rebanhos",
+        "D4C": tipo_rebanho_cod,
+        "D4N": tipo_rebanho_nome,
+    }
+
+
+@pytest.fixture
+def ppm_raw_minimo() -> pd.DataFrame:
+    """PPM sintética com 3 municípios × 3 tipos de rebanho.
+
+    Inclui valor '-' (zero por convenção IBGE), whitespace irregular, e
+    o tipo redundante 'Suíno - matrizes desuínos' para testar filtragem.
+    """
+    linhas = [
+        # Município 1200013 (Acrelândia-AC): bovinocultura alta, suínos, avicultura
+        _ppm_row(1200013, "Acrelândia (AC)", "2670", "Bovino", "50000"),
+        _ppm_row(1200013, "Acrelândia (AC)", "32794", "Suíno - total", "3000"),
+        _ppm_row(1200013, "Acrelândia (AC)", "32796", "Galináceos - total", "80000"),
+        _ppm_row(1200013, "Acrelândia (AC)", "32795", "Suíno - matrizes desuínos", "400"),
+        # Município 3111606 (Cambuquira-MG): bovinos médios, sem suínos
+        _ppm_row(3111606, "Cambuquira (MG)", "2670", " Bovino ", "10000"),  # espaços!
+        _ppm_row(3111606, "Cambuquira (MG)", "32796", "Galináceos - total", "5000"),
+        _ppm_row(3111606, "Cambuquira (MG)", "32794", "Suíno - total", "-"),  # zero IBGE
+        # Município 3550308 (São Paulo-SP): urbano, sem produção
+        _ppm_row(3550308, "São Paulo (SP)", "2670", "Bovino", "-"),
+        _ppm_row(3550308, "São Paulo (SP)", "32794", "Suíno - total", "-"),
+    ]
+    return pd.DataFrame(linhas)
+
+
+@pytest.fixture
+def localidades_minimo() -> pd.DataFrame:
+    """Localidades sintéticas cobrindo os municípios da fixture ppm_raw_minimo.
+
+    Inclui um município adicional (Manaus-AM) que não aparece na PPM, para
+    exercitar o merge com municípios "órfãos" (sem dados PPM → recebem zero).
+    """
+    from rec_agro_br import dataset
+
+    locs_raw = [
+        {
+            "id": 1200013,
+            "nome": "Acrelândia",
+            "microrregiao": {
+                "id": 12002,
+                "nome": "Rio Branco",
+                "mesorregiao": {
+                    "id": 1201,
+                    "nome": "Vale do Acre",
+                    "UF": {
+                        "id": 12,
+                        "sigla": "AC",
+                        "nome": "Acre",
+                        "regiao": {"id": 1, "sigla": "N", "nome": "Norte"},
+                    },
+                },
+            },
+        },
+        {
+            "id": 3111606,
+            "nome": "Cambuquira",
+            "microrregiao": {
+                "id": 31035,
+                "nome": "São Lourenço",
+                "mesorregiao": {
+                    "id": 3110,
+                    "nome": "Sul/Sudoeste de Minas",
+                    "UF": {
+                        "id": 31,
+                        "sigla": "MG",
+                        "nome": "Minas Gerais",
+                        "regiao": {"id": 3, "sigla": "SE", "nome": "Sudeste"},
+                    },
+                },
+            },
+        },
+        {
+            "id": 3550308,
+            "nome": "São Paulo",
+            "microrregiao": {
+                "id": 35061,
+                "nome": "São Paulo",
+                "mesorregiao": {
+                    "id": 3515,
+                    "nome": "Metropolitana de São Paulo",
+                    "UF": {
+                        "id": 35,
+                        "sigla": "SP",
+                        "nome": "São Paulo",
+                        "regiao": {"id": 3, "sigla": "SE", "nome": "Sudeste"},
+                    },
+                },
+            },
+        },
+        # Município sem correspondência na PPM (órfão) — testa left join
+        {
+            "id": 1302603,
+            "nome": "Manaus",
+            "microrregiao": {
+                "id": 13007,
+                "nome": "Manaus",
+                "mesorregiao": {
+                    "id": 1303,
+                    "nome": "Centro Amazonense",
+                    "UF": {
+                        "id": 13,
+                        "sigla": "AM",
+                        "nome": "Amazonas",
+                        "regiao": {"id": 1, "sigla": "N", "nome": "Norte"},
+                    },
+                },
+            },
+        },
+    ]
+    return dataset._localidades_to_dataframe(locs_raw)
+
+
+# =============================================================================
 # Fixture de isolamento de diretórios de dados
 # =============================================================================
 @pytest.fixture

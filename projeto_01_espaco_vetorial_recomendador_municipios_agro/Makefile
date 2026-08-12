@@ -14,7 +14,8 @@
 # =============================================================================
 
 .PHONY: help setup test test-network test-all lint notebook \
-        download-loc download-ppm download-all clean clean-data
+        download-loc download-ppm download-all build-features \
+        clean clean-data
 
 # Detecção do sistema para escolher o python correto
 ifeq ($(OS),Windows_NT)
@@ -36,6 +37,7 @@ help:
 	@echo "  download-loc      Baixa lista de municipios da API Localidades IBGE"
 	@echo "  download-ppm      Baixa PPM tabela 3939 da API SIDRA"
 	@echo "  download-all      Baixa localidades + PPM"
+	@echo "  build-features    Roda pipeline de feature engineering (features.py)"
 	@echo "  clean             Remove __pycache__, .pytest_cache, .ruff_cache"
 	@echo "  clean-data        Remove data/interim/* e data/processed/* (preserva raw)"
 
@@ -65,6 +67,9 @@ download-ppm:
 
 download-all:
 	$(PYTHON) -m rec_agro_br.dataset all
+
+build-features:
+	$(PYTHON) -m rec_agro_br.features
 
 lint:
 	$(PYTHON) -m ruff check src/ tests/

@@ -99,29 +99,29 @@ O projeto está sendo construído em fases progressivas para permitir validaçã
 |------|--------|--------|
 | 1.A | Estrutura, config, testes de sanidade | Concluída |
 | 1.B | Módulo `dataset.py` — download da API SIDRA e da API Localidades | Concluída |
-| 1.C | Módulo `features.py` — montagem das "tags" agropecuárias por município | A implementar |
+| 1.C | Módulo `features.py` — feature engineering e montagem das tags | Concluída |
 | 1.D | Módulos `vectorize.py` e `similarity.py` | A implementar |
 | 1.E | Módulo `recommender.py` e notebook principal | A implementar |
 | 1.F | Apostila didática completa | A implementar |
 | 1.G | Extensão de mestrado — validação espacial (Moran's I) | Opcional |
 
-### Novidades da Fase 1.B
+### Novidades da Fase 1.C
 
-O módulo `dataset.py` já está implementado com:
+O módulo `features.py` implementa o pipeline completo de feature engineering, transformando os artefatos brutos do IBGE em um dataset final pronto para vetorização. Cinco estágios organizados como funções puras (recebem DataFrame, devolvem DataFrame), permitindo composição, teste isolado e reuso:
 
-- Download idempotente com cache em disco (arquivo baixado uma vez, lido do disco nas execuções seguintes).
-- Sessão HTTP com retry exponencial para tolerar falhas transientes 5xx do IBGE.
-- Cliente SIDRA injetável, o que permite testes 100% offline.
-- CLI para uso a partir do terminal: `python -m rec_agro_br.dataset {localidades|ppm|all} [--ano N] [--force]`.
-- Suíte pytest ampliada com 30+ testes unitários (sem rede) e 2 testes de integração marcados `@pytest.mark.network` (só rodam com `pytest -m network`).
+- `clean_ppm` renomeia colunas do formato criptografado do `sidrapy` (D1C, D2N, ...) para nomes legíveis, tipa `valor` corretamente (o hífen `-` do IBGE vira zero por convenção), normaliza espaços em nomes e descarta subcategorias redundantes (matrizes de suínos, galinhas separadas).
+- `pivot_ppm_wide` transforma o formato long em wide, uma linha por município e uma coluna por atividade.
+- `merge_com_localidades` faz left join preservando todos os 5571 municípios brasileiros; municípios que a PPM não reporta recebem zero nas atividades.
+- `derive_perfis_agropecuarios`, `derive_especializacao`, `derive_diversidade` derivam features categóricas que fazem o papel dos `genres`, `crew` e `cast` do projeto DSA original: cada município ganha um perfil quantitativo por atividade (sem/baixa/media/alta), uma atividade dominante, e uma lista de atividades presentes.
+- `build_tags` concatena tudo em uma única string por município, normalizada para snake_case, pronta para o `CountVectorizer` da Fase 1.D.
 
-Para disparar o download real:
+Para executar o pipeline:
 
 ```powershell
-.\tasks.ps1 download-all
+.\tasks.ps1 build-features
 ```
 
-Os arquivos são gravados em `data/raw/` (JSON bruto da API Localidades e Parquet bruto da PPM) e em `data/interim/` (Parquet achatado das localidades).
+Isso lê `data/raw/ppm_3939_efetivo_rebanhos_last_1.parquet` e `data/interim/municipios_localidades.parquet` e gera `data/processed/municipios_features.parquet` com aproximadamente 22 colunas por município.
 
 ## Aspectos pedagógicos
 

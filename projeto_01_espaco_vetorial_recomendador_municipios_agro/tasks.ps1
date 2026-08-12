@@ -36,6 +36,7 @@ function Show-Help {
     Write-Host "  download-loc      Baixa lista de municipios da API Localidades IBGE"
     Write-Host "  download-ppm      Baixa PPM tabela 3939 da API SIDRA"
     Write-Host "  download-all      Baixa localidades + PPM"
+    Write-Host "  build-features    Roda pipeline de feature engineering (features.py)"
     Write-Host "  clean             Remove __pycache__, .pytest_cache, .ruff_cache"
     Write-Host "  clean-data        Remove data/interim/* e data/processed/*"
 }
@@ -77,6 +78,10 @@ function Invoke-DownloadPPM {
 
 function Invoke-DownloadAll {
     & $Python -m rec_agro_br.dataset all
+}
+
+function Invoke-BuildFeatures {
+    & $Python -m rec_agro_br.features
 }
 
 function Invoke-Lint {
@@ -121,6 +126,7 @@ switch ($Task) {
     "download-loc"   { Invoke-DownloadLoc }
     "download-ppm"   { Invoke-DownloadPPM }
     "download-all"   { Invoke-DownloadAll }
+    "build-features" { Invoke-BuildFeatures }
     "clean"          { Invoke-Clean }
     "clean-data"     { Invoke-CleanData }
     default {
