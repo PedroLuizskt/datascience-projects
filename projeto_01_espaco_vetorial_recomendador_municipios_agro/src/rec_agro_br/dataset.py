@@ -17,6 +17,19 @@ brutos, Parquet para tabulares), e as funções `load_*` posteriores leem
 apenas do disco, sem tocar a rede. Um flag ``force=True`` permite refazer
 o download quando a fonte for atualizada ou o cache local corromper.
 
+Limitação da API SIDRA e estratégia de lotes
+---------------------------------------------
+A API do SIDRA impõe um limite hard de **50.000 valores por request**. Como
+a tabela 3939 com todos os municípios × todos os tipos de rebanho retorna
+cerca de 55.700 valores (5570 × 10), pedir tudo em uma única chamada estoura
+o teto. A estratégia adotada é fatiar o download por Unidade da Federação:
+27 requests independentes, cada uma trazendo os municípios de uma UF,
+resultando em no máximo ~6.500 valores por chamada (para SP, a UF com mais
+municípios). Além de respeitar o limite, essa estratégia produz progressão
+natural (uma UF por vez), permite retry granular em caso de falha isolada
+e cria uma dependência limpa e explícita entre os dois passos do pipeline:
+o download da PPM consome o resultado do download das localidades.
+
 Notas de reprodutibilidade
 --------------------------
 A PPM é anual. O ano de referência baixado depende do parâmetro ``ano``
@@ -29,7 +42,7 @@ Exemplos
 Uso programático em um notebook::
 
     from rec_agro_br import dataset
-    df_loc = dataset.download_localidades()      # 5570 linhas
+    df_loc = dataset.download_localidades()      # 5571 linhas
     df_ppm = dataset.download_ppm_efetivo_rebanhos(ano=2023)
 
 Uso como linha de comando::
@@ -52,6 +65,7 @@ import pandas as pd
 import requests
 import sidrapy
 from requests.adapters import HTTPAdapter
+from tqdm import tqdm
 from urllib3.util.retry import Retry
 
 from rec_agro_br import config
@@ -62,10 +76,6 @@ logger = logging.getLogger(__name__)
 # =============================================================================
 # Nomes canônicos de arquivos no disco
 # =============================================================================
-# Manter os nomes centralizados aqui evita erros de digitação em outros módulos
-# e facilita renomeações futuras. Os padrões seguem uma convenção simples:
-# `{fonte}_{descricao_curta}[.ext]` e, para dados anuais, incluem o ano no nome.
-
 LOCALIDADES_RAW_JSON: str = "municipios_ibge_localidades.json"
 LOCALIDADES_INTERIM_PARQUET: str = "municipios_localidades.parquet"
 PPM_RAW_PARQUET_TEMPLATE: str = "ppm_3939_efetivo_rebanhos_{ano}.parquet"
@@ -73,6 +83,11 @@ PPM_RAW_PARQUET_TEMPLATE: str = "ppm_3939_efetivo_rebanhos_{ano}.parquet"
 # Ano sentinela quando o usuário deixa PPM_ANO em branco. Sidrapy aceita
 # "last 1" como período para pegar o último disponível.
 PPM_ULTIMO_DISPONIVEL: str = "last 1"
+
+# Limite hard da API SIDRA por request. Documentado apenas parcialmente na
+# página oficial da API; descoberto empiricamente durante os testes de
+# integração da Fase 1.B.
+SIDRA_MAX_VALORES_POR_REQUEST: int = 50_000
 
 
 def get_localidades_raw_path() -> Path:
@@ -102,17 +117,7 @@ def get_ppm_raw_path(ano: int | str) -> Path:
 # Sessão HTTP com retry exponencial
 # =============================================================================
 def _build_session() -> requests.Session:
-    """Cria uma requests.Session com retry para falhas transientes.
-
-    A API do IBGE ocasionalmente retorna 502/503 sob carga. Uma sessão com
-    retry exponencial mitiga isso automaticamente sem exigir tratamento
-    manual em cada função de download.
-
-    Returns
-    -------
-    requests.Session
-        Sessão configurada com HTTPAdapter e política de retry.
-    """
+    """Cria uma requests.Session com retry para falhas transientes."""
     session = requests.Session()
     retry = Retry(
         total=5,
@@ -137,16 +142,6 @@ def _flatten_localidade(loc: dict[str, Any]) -> dict[str, Any]:
     ``município → microrregião → mesorregião → UF → região``. Para uso em um
     DataFrame, precisamos das colunas em um único nível. Esta função extrai
     de forma resiliente cada campo, tolerando níveis ausentes (retorna ``None``).
-
-    Parameters
-    ----------
-    loc : dict
-        Dicionário JSON retornado pela API para um município.
-
-    Returns
-    -------
-    dict
-        Dicionário plano com as chaves canônicas do dataset.
     """
     micro = loc.get("microrregiao") or {}
     meso = micro.get("mesorregiao") or {}
@@ -171,19 +166,7 @@ def _flatten_localidade(loc: dict[str, Any]) -> dict[str, Any]:
 def _localidades_to_dataframe(
     localidades: list[dict[str, Any]],
 ) -> pd.DataFrame:
-    """Converte a lista bruta de municípios da API em DataFrame achatado.
-
-    Parameters
-    ----------
-    localidades : list of dict
-        Lista de dicionários exatamente como retornada pela API do IBGE.
-
-    Returns
-    -------
-    pandas.DataFrame
-        DataFrame com 12 colunas planas por município. Colunas de ID vêm
-        como inteiros nullable (Int64) para robustez a dados faltantes.
-    """
+    """Converte a lista bruta de municípios da API em DataFrame achatado."""
     if not localidades:
         raise ValueError(
             "A lista de localidades está vazia. A API não retornou dados."
@@ -191,7 +174,6 @@ def _localidades_to_dataframe(
     records = [_flatten_localidade(loc) for loc in localidades]
     df = pd.DataFrame.from_records(records)
 
-    # Tipagem explícita: IDs como Int64 (nullable), textos como string
     int_cols = [
         "id_municipio",
         "id_microrregiao",
@@ -213,32 +195,7 @@ def download_localidades(
     force: bool = False,
     session: requests.Session | None = None,
 ) -> pd.DataFrame:
-    """Baixa a lista completa de municípios brasileiros da API do IBGE.
-
-    O JSON bruto é salvo em ``data/raw/`` e o DataFrame achatado em
-    ``data/interim/`` como Parquet. Se ambos os arquivos existirem e
-    ``force=False``, a função lê do disco sem tocar a rede.
-
-    Parameters
-    ----------
-    force : bool
-        Se ``True``, refaz o download mesmo que o cache local exista.
-    session : requests.Session, optional
-        Sessão HTTP para usar. Útil para injeção em testes. Se ``None``,
-        cria uma sessão com retry padrão.
-
-    Returns
-    -------
-    pandas.DataFrame
-        DataFrame com um município por linha e 12 colunas planas.
-
-    Raises
-    ------
-    requests.HTTPError
-        Se a API retornar código de erro persistente após retries.
-    ValueError
-        Se a resposta da API vier vazia ou malformada.
-    """
+    """Baixa a lista completa de municípios brasileiros da API do IBGE."""
     config.ensure_directories()
     raw_path = get_localidades_raw_path()
     interim_path = get_localidades_interim_path()
@@ -261,7 +218,6 @@ def download_localidades(
 
     logger.info("[OK] Recebidos %d municípios da API do IBGE", len(localidades))
 
-    # Persiste JSON bruto (imutável) e Parquet achatado (para consumo)
     raw_path.write_text(
         json.dumps(localidades, ensure_ascii=False, indent=2),
         encoding="utf-8",
@@ -280,19 +236,7 @@ def download_localidades(
 
 
 def load_localidades() -> pd.DataFrame:
-    """Carrega o DataFrame de localidades já baixado previamente.
-
-    Returns
-    -------
-    pandas.DataFrame
-        DataFrame carregado do Parquet em ``data/interim/``.
-
-    Raises
-    ------
-    FileNotFoundError
-        Se o Parquet ainda não foi gerado (rodar `download_localidades`
-        antes, ou o CLI `python -m rec_agro_br.dataset localidades`).
-    """
+    """Carrega o DataFrame de localidades já baixado previamente."""
     interim_path = get_localidades_interim_path()
     if not interim_path.exists():
         raise FileNotFoundError(
@@ -306,38 +250,59 @@ def load_localidades() -> pd.DataFrame:
 # PPM — Tabela 3939 do SIDRA (Efetivo dos rebanhos)
 # =============================================================================
 def _resolver_periodo_ppm(ano: int | None) -> tuple[str, int | str]:
-    """Resolve o parâmetro `period` da chamada sidrapy e a chave de cache.
-
-    Se ``ano`` for ``None``, usa a sentinela ``PPM_ULTIMO_DISPONIVEL``
-    ("last 1"), o que faz o SIDRA devolver o ano mais recente disponível.
-
-    Parameters
-    ----------
-    ano : int or None
-        Ano de referência. Se ``None``, usa o último disponível.
-
-    Returns
-    -------
-    tuple of (str, int or str)
-        - período no formato aceito por sidrapy
-        - chave para caminho de arquivo (ano numérico ou string sentinela)
-    """
+    """Resolve o parâmetro `period` da chamada sidrapy e a chave de cache."""
     if ano is None:
         return PPM_ULTIMO_DISPONIVEL, PPM_ULTIMO_DISPONIVEL
     return str(ano), ano
+
+
+def _agrupar_municipios_por_uf(
+    df_localidades: pd.DataFrame,
+) -> dict[str, list[str]]:
+    """Agrupa códigos IBGE de municípios por sigla da UF.
+
+    A saída é ordenada alfabeticamente por sigla (AC, AL, AM, ..., TO)
+    para gerar logs previsíveis. Municípios sem UF associada (não deveria
+    ocorrer em dados reais) são silenciosamente descartados.
+
+    Parameters
+    ----------
+    df_localidades : pandas.DataFrame
+        DataFrame com as colunas ``sigla_uf`` e ``id_municipio``, tipicamente
+        vindo de ``load_localidades()``.
+
+    Returns
+    -------
+    dict[str, list[str]]
+        Dicionário {sigla_uf: [codigo_municipio, ...]}. Códigos como strings
+        para uso direto na chamada sidrapy.
+    """
+    df = df_localidades[["sigla_uf", "id_municipio"]].dropna()
+    resultado: dict[str, list[str]] = {}
+    for sigla in sorted(df["sigla_uf"].unique()):
+        mask = df["sigla_uf"] == sigla
+        codigos = df.loc[mask, "id_municipio"].astype("int64").astype(str).tolist()
+        resultado[str(sigla)] = codigos
+    return resultado
 
 
 def download_ppm_efetivo_rebanhos(
     ano: int | None = None,
     force: bool = False,
     sidra_client: Any | None = None,
+    show_progress: bool | None = None,
 ) -> pd.DataFrame:
     """Baixa a tabela 3939 (PPM/SIDRA) para todos os municípios brasileiros.
 
-    A tabela retorna, em formato long, o efetivo de cada tipo de rebanho
-    (bovinos, bubalinos, suínos, matrizes de suínos, equinos, ovinos,
-    caprinos, galináceos, galinhas e codornas) por município para um ano
-    de referência.
+    O download é feito em 27 lotes, um por Unidade da Federação, para
+    contornar o limite de 50.000 valores por request da API SIDRA. Os
+    resultados são concatenados em um único DataFrame antes da persistência
+    em disco.
+
+    Depende de que ``download_localidades()`` já tenha sido executado, pois
+    consulta o Parquet das localidades para saber quais códigos IBGE mandar
+    em cada lote. Se as localidades ainda não estiverem em disco, esta
+    função as baixa automaticamente antes de prosseguir.
 
     Parameters
     ----------
@@ -349,17 +314,23 @@ def download_ppm_efetivo_rebanhos(
     sidra_client : object, optional
         Cliente com método ``get_table(**kwargs)``. Injeção para testes.
         Se ``None``, usa o módulo ``sidrapy`` real.
+    show_progress : bool, optional
+        Se ``True``, mostra barra de progresso via tqdm. Se ``None``
+        (default), desabilita quando um ``sidra_client`` foi injetado
+        (indicativo de teste) e habilita caso contrário.
 
     Returns
     -------
     pandas.DataFrame
         DataFrame em formato long conforme retornado pelo SIDRA, com o
-        cabeçalho descritivo removido.
+        cabeçalho descritivo removido (``header='n'``) e todas as UFs
+        concatenadas.
 
     Raises
     ------
     RuntimeError
-        Se a chamada ao SIDRA falhar após retries internos do sidrapy.
+        Se nenhuma UF conseguir retornar dados, ou se o SIDRA falhar
+        de forma persistente após retries internos.
     """
     config.ensure_directories()
 
@@ -376,33 +347,90 @@ def download_ppm_efetivo_rebanhos(
         )
         return pd.read_parquet(raw_path)
 
-    client = sidra_client if sidra_client is not None else sidrapy
+    # Garante que localidades está em disco (necessária para chunking por UF)
+    if not get_localidades_interim_path().exists():
+        logger.info(
+            "[INFO] Localidades ausentes em disco. "
+            "Baixando primeiro como pré-requisito da PPM."
+        )
+        download_localidades()
+
+    df_loc = load_localidades()
+    municipios_por_uf = _agrupar_municipios_por_uf(df_loc)
     logger.info(
-        "[SIDRA] Baixando tabela %s (PPM Efetivo Rebanhos), "
-        "nível=%s, período=%s. Isso pode demorar 30-90s.",
-        config.PPM_TABLE_CODE,
-        config.SIDRA_TERRITORIAL_LEVEL_MUNICIPIO,
-        periodo,
+        "[INFO] Fatiando download PPM em %d lotes (um por UF) para "
+        "respeitar o limite de %d valores/request da API SIDRA.",
+        len(municipios_por_uf),
+        SIDRA_MAX_VALORES_POR_REQUEST,
     )
 
-    df = client.get_table(
-        table_code=config.PPM_TABLE_CODE,
-        territorial_level=config.SIDRA_TERRITORIAL_LEVEL_MUNICIPIO,
-        ibge_territorial_code="all",
-        variable=config.PPM_VARIABLE_CODE,
-        classifications={config.SIDRA_CLASSIFICATION_TIPO_REBANHO: "all"},
-        period=periodo,
-        header="n",  # descarta linha descritiva de cabeçalho
-        format="pandas",
+    client = sidra_client if sidra_client is not None else sidrapy
+
+    if show_progress is None:
+        show_progress = sidra_client is None
+
+    partes: list[pd.DataFrame] = []
+    ufs_com_falha: list[str] = []
+
+    iterator = tqdm(
+        municipios_por_uf.items(),
+        desc="Baixando PPM por UF",
+        unit="UF",
+        disable=not show_progress,
     )
 
-    if df is None or df.empty:
-        raise RuntimeError(
-            "SIDRA retornou DataFrame vazio para PPM tabela "
-            f"{config.PPM_TABLE_CODE}. Verifique a disponibilidade da API."
+    for sigla, codigos in iterator:
+        codigos_csv = ",".join(codigos)
+        try:
+            df_uf = client.get_table(
+                table_code=config.PPM_TABLE_CODE,
+                territorial_level=config.SIDRA_TERRITORIAL_LEVEL_MUNICIPIO,
+                ibge_territorial_code=codigos_csv,
+                variable=config.PPM_VARIABLE_CODE,
+                classifications={config.SIDRA_CLASSIFICATION_TIPO_REBANHO: "all"},
+                period=periodo,
+                header="n",
+                format="pandas",
+            )
+        except Exception as e:  # noqa: BLE001
+            logger.warning(
+                "[AVISO] Falha ao baixar UF %s (%d municípios): %s",
+                sigla,
+                len(codigos),
+                e,
+            )
+            ufs_com_falha.append(sigla)
+            continue
+
+        if df_uf is None or df_uf.empty:
+            logger.warning("[AVISO] SIDRA retornou vazio para UF %s", sigla)
+            ufs_com_falha.append(sigla)
+            continue
+
+        partes.append(df_uf)
+        logger.debug(
+            "[OK] UF %s: %d linhas recebidas (%d municípios × rebanhos)",
+            sigla,
+            len(df_uf),
+            len(codigos),
         )
 
-    logger.info("[OK] PPM recebida, shape=%s", df.shape)
+    if not partes:
+        raise RuntimeError(
+            "Nenhuma UF retornou dados. Verifique conectividade e "
+            "disponibilidade da API SIDRA. UFs testadas: "
+            f"{list(municipios_por_uf.keys())}"
+        )
+
+    df = pd.concat(partes, ignore_index=True)
+    logger.info(
+        "[OK] PPM consolidada: %d linhas de %d UFs bem-sucedidas "
+        "(%d falhas: %s)",
+        len(df),
+        len(municipios_por_uf) - len(ufs_com_falha),
+        len(ufs_com_falha),
+        ufs_com_falha or "nenhuma",
+    )
 
     df.to_parquet(raw_path, index=False)
     logger.info("[IO] Parquet salvo em %s", raw_path)
@@ -411,23 +439,7 @@ def download_ppm_efetivo_rebanhos(
 
 
 def load_ppm_efetivo_rebanhos(ano: int | str) -> pd.DataFrame:
-    """Carrega o Parquet bruto da PPM para um ano previamente baixado.
-
-    Parameters
-    ----------
-    ano : int or str
-        Ano de referência ou a sentinela ``PPM_ULTIMO_DISPONIVEL``.
-
-    Returns
-    -------
-    pandas.DataFrame
-        DataFrame long carregado do disco.
-
-    Raises
-    ------
-    FileNotFoundError
-        Se o Parquet ainda não existe.
-    """
+    """Carrega o Parquet bruto da PPM para um ano previamente baixado."""
     raw_path = get_ppm_raw_path(ano)
     if not raw_path.exists():
         raise FileNotFoundError(
@@ -461,7 +473,7 @@ def _cmd_ppm(args: argparse.Namespace) -> int:
     df = download_ppm_efetivo_rebanhos(ano=args.ano, force=args.force)
     print(f"\n[OK] PPM: shape={df.shape}")
     print(f"     Colunas: {list(df.columns)}")
-    print(df.head(5).to_string(index=False))
+    print(df.head(10).to_string(index=False))
     return 0
 
 

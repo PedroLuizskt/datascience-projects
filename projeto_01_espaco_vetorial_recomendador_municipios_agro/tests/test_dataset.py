@@ -262,12 +262,55 @@ class TestResolverPeriodoPPM:
 
 
 # =============================================================================
-# download_ppm_efetivo_rebanhos — com FakeSidraClient
+# _agrupar_municipios_por_uf — chunking helper
+# =============================================================================
+class TestAgruparMunicipiosPorUF:
+    def test_agrupamento_gera_dicionario_por_uf(
+        self, loc_lista_ampla: list[dict[str, Any]]
+    ) -> None:
+        df = dataset._localidades_to_dataframe(loc_lista_ampla)
+        agrupado = dataset._agrupar_municipios_por_uf(df)
+        # loc_lista_ampla tem SP, MG, RS, AM (4 UFs distintas)
+        assert set(agrupado.keys()) == {"SP", "MG", "RS", "AM"}
+        assert all(isinstance(v, list) for v in agrupado.values())
+
+    def test_codigos_sao_strings_de_inteiros(
+        self, loc_lista_ampla: list[dict[str, Any]]
+    ) -> None:
+        df = dataset._localidades_to_dataframe(loc_lista_ampla)
+        agrupado = dataset._agrupar_municipios_por_uf(df)
+        for _, codigos in agrupado.items():
+            for cod in codigos:
+                assert isinstance(cod, str)
+                assert cod.isdigit(), f"Código {cod} não é string de dígitos"
+
+    def test_ordem_alfabetica_por_sigla(
+        self, loc_lista_ampla: list[dict[str, Any]]
+    ) -> None:
+        df = dataset._localidades_to_dataframe(loc_lista_ampla)
+        agrupado = dataset._agrupar_municipios_por_uf(df)
+        chaves = list(agrupado.keys())
+        assert chaves == sorted(chaves)
+
+    def test_uf_ausente_e_descartada(self) -> None:
+        """Município sem UF (dado degenerado) é silenciosamente ignorado."""
+        df = pd.DataFrame(
+            {
+                "sigla_uf": ["SP", None, "MG"],
+                "id_municipio": [3550308, 9999999, 3111606],
+            }
+        )
+        agrupado = dataset._agrupar_municipios_por_uf(df)
+        assert set(agrupado.keys()) == {"SP", "MG"}
+
+
+# =============================================================================
+# download_ppm_efetivo_rebanhos — com FakeSidraClient e chunking por UF
 # =============================================================================
 class TestDownloadPPM:
     def test_download_com_cliente_falso_grava_parquet(
         self,
-        isolated_data_dirs: Path,
+        localidades_gravadas_uma_uf: pd.DataFrame,
         fake_sidra_client: "Any",
     ) -> None:
         df = dataset.download_ppm_efetivo_rebanhos(
@@ -280,7 +323,7 @@ class TestDownloadPPM:
 
     def test_parametros_passados_ao_sidra_estao_corretos(
         self,
-        isolated_data_dirs: Path,
+        localidades_gravadas_uma_uf: pd.DataFrame,
         fake_sidra_client: "Any",
     ) -> None:
         dataset.download_ppm_efetivo_rebanhos(
@@ -290,7 +333,11 @@ class TestDownloadPPM:
         assert call is not None
         assert call["table_code"] == config.PPM_TABLE_CODE
         assert call["territorial_level"] == config.SIDRA_TERRITORIAL_LEVEL_MUNICIPIO
-        assert call["ibge_territorial_code"] == "all"
+        # Códigos passados devem ser CSV de códigos IBGE (não "all")
+        assert call["ibge_territorial_code"] != "all"
+        assert "," in call["ibge_territorial_code"] or call[
+            "ibge_territorial_code"
+        ].isdigit()
         assert call["variable"] == config.PPM_VARIABLE_CODE
         assert call["period"] == "2022"
         assert call["header"] == "n"
@@ -298,18 +345,29 @@ class TestDownloadPPM:
 
     def test_ano_none_usa_sentinela_no_sidra(
         self,
-        isolated_data_dirs: Path,
+        localidades_gravadas_uma_uf: pd.DataFrame,
         fake_sidra_client: "Any",
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        # Força PPM_ANO=None para o teste
         monkeypatch.setattr(config, "PPM_ANO", None)
         dataset.download_ppm_efetivo_rebanhos(sidra_client=fake_sidra_client)
         assert fake_sidra_client.last_call["period"] == dataset.PPM_ULTIMO_DISPONIVEL
 
-    def test_cache_evita_segunda_chamada_ao_sidra(
+    def test_uma_chamada_ao_sidra_por_uf(
         self,
-        isolated_data_dirs: Path,
+        localidades_gravadas_multi_uf: tuple[pd.DataFrame, list],
+        fake_sidra_client: "Any",
+    ) -> None:
+        """Com 4 UFs em localidades, deve haver exatamente 4 chamadas SIDRA."""
+        _, ufs = localidades_gravadas_multi_uf
+        dataset.download_ppm_efetivo_rebanhos(
+            ano=2023, sidra_client=fake_sidra_client
+        )
+        assert fake_sidra_client.call_count == len(ufs)
+
+    def test_uma_uf_uma_chamada(
+        self,
+        localidades_gravadas_uma_uf: pd.DataFrame,
         fake_sidra_client: "Any",
     ) -> None:
         dataset.download_ppm_efetivo_rebanhos(
@@ -317,33 +375,71 @@ class TestDownloadPPM:
         )
         assert fake_sidra_client.call_count == 1
 
+    def test_cache_evita_novo_batch_completo(
+        self,
+        localidades_gravadas_multi_uf: tuple[pd.DataFrame, list],
+        fake_sidra_client: "Any",
+    ) -> None:
+        _, ufs = localidades_gravadas_multi_uf
         dataset.download_ppm_efetivo_rebanhos(
             ano=2023, sidra_client=fake_sidra_client
         )
-        assert fake_sidra_client.call_count == 1, "Segunda chamada não deveria bater no SIDRA"
+        assert fake_sidra_client.call_count == len(ufs)
 
-    def test_force_true_refaz(
+        # Segunda invocação: deve ler do cache, sem novas chamadas
+        dataset.download_ppm_efetivo_rebanhos(
+            ano=2023, sidra_client=fake_sidra_client
+        )
+        assert fake_sidra_client.call_count == len(ufs)
+
+    def test_force_true_refaz_batch_completo(
         self,
-        isolated_data_dirs: Path,
+        localidades_gravadas_multi_uf: tuple[pd.DataFrame, list],
         fake_sidra_client: "Any",
     ) -> None:
+        _, ufs = localidades_gravadas_multi_uf
         dataset.download_ppm_efetivo_rebanhos(
             ano=2023, sidra_client=fake_sidra_client
         )
         dataset.download_ppm_efetivo_rebanhos(
             ano=2023, sidra_client=fake_sidra_client, force=True
         )
-        assert fake_sidra_client.call_count == 2
+        assert fake_sidra_client.call_count == 2 * len(ufs)
 
-    def test_sidra_vazio_levanta_runtime_error(
+    def test_sidra_vazio_em_todas_ufs_levanta_runtime_error(
         self,
-        isolated_data_dirs: Path,
+        localidades_gravadas_uma_uf: pd.DataFrame,
         fake_sidra_empty: "Any",
     ) -> None:
-        with pytest.raises(RuntimeError, match="vazio"):
+        with pytest.raises(RuntimeError, match="Nenhuma UF"):
             dataset.download_ppm_efetivo_rebanhos(
                 ano=2023, sidra_client=fake_sidra_empty
             )
+
+    def test_localidades_ausentes_dispara_download_automatico(
+        self,
+        isolated_data_dirs: Path,
+        loc_lista_ampla: list[dict[str, Any]],
+        fake_sidra_client: "Any",
+    ) -> None:
+        """Se localidades não estão em disco, PPM deve baixá-las antes."""
+        session = _FakeSession(loc_lista_ampla)
+        # Monkeypatch da função interna que constrói sessão HTTP
+        import rec_agro_br.dataset as ds_module
+
+        original_build = ds_module._build_session
+        ds_module._build_session = lambda: session  # type: ignore
+        try:
+            assert not dataset.get_localidades_interim_path().exists()
+            dataset.download_ppm_efetivo_rebanhos(
+                ano=2023, sidra_client=fake_sidra_client
+            )
+            # Agora localidades devem existir
+            assert dataset.get_localidades_interim_path().exists()
+            # Uma chamada HTTP para localidades foi feita
+            assert len(session.calls) == 1
+        finally:
+            ds_module._build_session = original_build
 
 
 class TestLoadPPM:
@@ -355,7 +451,7 @@ class TestLoadPPM:
 
     def test_load_apos_download_le_igual(
         self,
-        isolated_data_dirs: Path,
+        localidades_gravadas_uma_uf: pd.DataFrame,
         fake_sidra_client: "Any",
     ) -> None:
         df_baixado = dataset.download_ppm_efetivo_rebanhos(

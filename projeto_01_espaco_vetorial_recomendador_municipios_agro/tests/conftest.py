@@ -220,3 +220,82 @@ def isolated_data_dirs(
     monkeypatch.setattr(config, "FIGURES_DIR", tmp_path / "figures")
     config.ensure_directories()
     return tmp_path
+
+
+# =============================================================================
+# Localidades de conveniência: municípios sintéticos com múltiplas UFs
+# =============================================================================
+def _sintetizar_localidades_multi_uf(
+    ufs: list[tuple[str, int]],
+    municipios_por_uf: int = 3,
+) -> list[dict[str, Any]]:
+    """Gera lista sintética de municípios distribuídos entre UFs.
+
+    Útil em testes que precisam validar o chunking por UF: passamos várias
+    UFs e a fixture devolve municípios sintéticos com códigos IBGE plausíveis.
+
+    Parameters
+    ----------
+    ufs : list of (sigla_uf, id_uf)
+        Ex.: [("SP", 35), ("MG", 31), ("RS", 43)]
+    municipios_por_uf : int
+        Quantos municípios por UF gerar.
+    """
+    resultado: list[dict[str, Any]] = []
+    id_seq = 1
+    for sigla, id_uf in ufs:
+        for i in range(municipios_por_uf):
+            codigo = int(f"{id_uf}{i:05d}0")
+            resultado.append(
+                {
+                    "id": codigo,
+                    "nome": f"Municipio {sigla} {i}",
+                    "microrregiao": {
+                        "id": id_uf * 1000 + i,
+                        "nome": f"Micro {sigla} {i}",
+                        "mesorregiao": {
+                            "id": id_uf * 100 + i,
+                            "nome": f"Meso {sigla} {i}",
+                            "UF": {
+                                "id": id_uf,
+                                "sigla": sigla,
+                                "nome": f"UF {sigla}",
+                                "regiao": {
+                                    "id": 1 + (id_uf % 5),
+                                    "sigla": "R",
+                                    "nome": "Regiao Fake",
+                                },
+                            },
+                        },
+                    },
+                }
+            )
+            id_seq += 1
+    return resultado
+
+
+@pytest.fixture
+def localidades_gravadas_uma_uf(
+    isolated_data_dirs: Path,
+) -> pd.DataFrame:
+    """Grava e retorna localidades sintéticas com uma única UF (SP)."""
+    from rec_agro_br import dataset
+
+    locs = _sintetizar_localidades_multi_uf([("SP", 35)], municipios_por_uf=3)
+    df = dataset._localidades_to_dataframe(locs)
+    df.to_parquet(dataset.get_localidades_interim_path(), index=False)
+    return df
+
+
+@pytest.fixture
+def localidades_gravadas_multi_uf(
+    isolated_data_dirs: Path,
+) -> tuple[pd.DataFrame, list[tuple[str, int]]]:
+    """Grava e retorna localidades sintéticas com 4 UFs distintas."""
+    from rec_agro_br import dataset
+
+    ufs = [("SP", 35), ("MG", 31), ("RS", 43), ("AM", 13)]
+    locs = _sintetizar_localidades_multi_uf(ufs, municipios_por_uf=2)
+    df = dataset._localidades_to_dataframe(locs)
+    df.to_parquet(dataset.get_localidades_interim_path(), index=False)
+    return df, ufs
