@@ -15,7 +15,7 @@
 
 .PHONY: help setup test test-network test-all lint notebook \
         download-loc download-ppm download-all build-features \
-        vectorize vectorize-no-stem clean clean-data
+        vectorize vectorize-no-stem recommend clean clean-data
 
 # Detecção do sistema para escolher o python correto
 ifeq ($(OS),Windows_NT)
@@ -40,6 +40,7 @@ help:
 	@echo "  build-features    Roda pipeline de feature engineering (features.py)"
 	@echo "  vectorize         Ajusta CountVectorizer e salva matriz esparsa"
 	@echo "  vectorize-no-stem Idem, mas sem stemming (para comparacao)"
+	@echo "  recommend NOME    Consulta o recomendador (uso: make recommend NOME=Cambuquira UF=MG)"
 	@echo "  clean             Remove __pycache__, .pytest_cache, .ruff_cache"
 	@echo "  clean-data        Remove data/interim/* e data/processed/* (preserva raw)"
 
@@ -78,6 +79,13 @@ vectorize:
 
 vectorize-no-stem:
 	$(PYTHON) -m rec_agro_br.vectorize --sem-stemming
+
+recommend:
+	@if [ -z "$(NOME)" ]; then \
+		echo "[ERRO] Uso: make recommend NOME=Cambuquira UF=MG K=5"; \
+		exit 1; \
+	fi
+	$(PYTHON) -m rec_agro_br.recommender "$(NOME)" $(if $(UF),--uf $(UF)) $(if $(K),--k $(K))
 
 lint:
 	$(PYTHON) -m ruff check src/ tests/

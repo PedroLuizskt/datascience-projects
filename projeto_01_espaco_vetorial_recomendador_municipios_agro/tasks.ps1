@@ -17,7 +17,10 @@
 
 param(
     [Parameter(Position = 0)]
-    [string]$Task = "help"
+    [string]$Task = "help",
+
+    [Parameter(ValueFromRemainingArguments = $true)]
+    [string[]]$Args
 )
 
 $ErrorActionPreference = "Stop"
@@ -39,6 +42,7 @@ function Show-Help {
     Write-Host "  build-features    Roda pipeline de feature engineering (features.py)"
     Write-Host "  vectorize         Ajusta CountVectorizer e salva matriz esparsa"
     Write-Host "  vectorize-no-stem Idem, mas sem stemming (para comparacao)"
+    Write-Host "  recommend         Consulta o recomendador (uso: .\tasks.ps1 recommend Cambuquira MG)"
     Write-Host "  clean             Remove __pycache__, .pytest_cache, .ruff_cache"
     Write-Host "  clean-data        Remove data/interim/* e data/processed/*"
 }
@@ -94,6 +98,24 @@ function Invoke-VectorizeNoStem {
     & $Python -m rec_agro_br.vectorize --sem-stemming
 }
 
+function Invoke-Recommend {
+    param(
+        [Parameter(Position = 0)] [string] $Nome,
+        [Parameter(Position = 1)] [string] $Uf,
+        [Parameter(Position = 2)] [int] $K = 5
+    )
+    if (-not $Nome) {
+        Write-Host "[ERRO] Uso: .\tasks.ps1 recommend <nome> [uf] [k]"
+        Write-Host "Exemplo: .\tasks.ps1 recommend Cambuquira MG 5"
+        return
+    }
+    if ($Uf) {
+        & $Python -m rec_agro_br.recommender $Nome --uf $Uf --k $K
+    } else {
+        & $Python -m rec_agro_br.recommender $Nome --k $K
+    }
+}
+
 function Invoke-Lint {
     & $Python -m ruff check src/ tests/
     & $Python -m ruff format --check src/ tests/
@@ -139,6 +161,12 @@ switch ($Task) {
     "build-features"   { Invoke-BuildFeatures }
     "vectorize"        { Invoke-Vectorize }
     "vectorize-no-stem"{ Invoke-VectorizeNoStem }
+    "recommend"        {
+        $nome = if ($Args.Count -gt 0) { $Args[0] } else { $null }
+        $uf   = if ($Args.Count -gt 1) { $Args[1] } else { $null }
+        $k    = if ($Args.Count -gt 2) { [int]$Args[2] } else { 5 }
+        Invoke-Recommend -Nome $nome -Uf $uf -K $k
+    }
     "clean"            { Invoke-Clean }
     "clean-data"     { Invoke-CleanData }
     default {

@@ -101,9 +101,46 @@ O projeto está sendo construído em fases progressivas para permitir validaçã
 | 1.B | Módulo `dataset.py` — download da API SIDRA e da API Localidades | Concluída |
 | 1.C | Módulo `features.py` — feature engineering e montagem das tags | Concluída |
 | 1.D | Módulos `vectorize.py` e `similarity.py` | Concluída |
-| 1.E | Módulo `recommender.py` e notebook principal | A implementar |
+| 1.E | Módulo `recommender.py` + notebook demonstrativo end-to-end | Concluída |
 | 1.F | Apostila didática completa | A implementar |
 | 1.G | Extensão de mestrado — validação espacial (Moran's I) | Opcional |
+
+### Novidades da Fase 1.E
+
+Duas entregas fecham o pipeline funcional do projeto: o módulo `recommender.py` que empacota tudo em uma API amigável, e um notebook Jupyter demonstrativo que percorre o pipeline de ponta a ponta.
+
+O `recommender.py` expõe a classe `MunicipioRecommender` com quatro métodos de consulta e um de explicação. O `recommend_by_name(nome, uf, k, excluir_mesmo_uf)` é o mais usado — aceita nome do município e opcionalmente UF para desambiguar homônimos, retornando os `k` municípios mais similares por similaridade cosseno. O `recommend_by_code(codigo, k)` faz a mesma coisa a partir do código IBGE de 7 dígitos, útil para integração com outros sistemas. O `recommend_by_tags(tags, k)` permite queries hipotéticas: você monta manualmente uma string como `"sudeste alta_bovinocultura alta_avicultura"` e o sistema devolve os municípios que mais se aproximam desse perfil. O `search(parcial)` faz busca fuzzy por nome parcial, útil quando o usuário não sabe grafia exata. E o `explain(query, recomendado)` decompõe uma recomendação em tokens compartilhados e distintos, mostrando as três métricas de distância (cosseno, euclidiana, manhattan) lado a lado — resposta à pergunta *"por que este município foi recomendado?"*.
+
+Uso via CLI:
+
+```powershell
+# Consulta simples por nome
+.\tasks.ps1 recommend Cambuquira MG
+
+# Ou direto com argumentos completos
+python -m rec_agro_br.recommender Cambuquira --uf MG --k 5
+
+# Busca análogos em outras UFs (excluindo MG)
+python -m rec_agro_br.recommender Cambuquira --uf MG --excluir-mesmo-uf
+
+# Com explicação da top-1
+python -m rec_agro_br.recommender Cambuquira --uf MG --explicar
+
+# Por código IBGE
+python -m rec_agro_br.recommender --code 3111606
+
+# Por tags customizadas
+python -m rec_agro_br.recommender --tags "sudeste alta_bovinocultura alta_avicultura"
+
+# Busca fuzzy por nome parcial
+python -m rec_agro_br.recommender --search "Cambu"
+```
+
+O notebook `notebooks/01_pipeline_end_to_end.ipynb` demonstra o projeto inteiro em 17 células de código e 18 de markdown, cobrindo: visão geral do dataset, distribuição de especializações agropecuárias, exemplos de tags construídas, funcionamento do `CountVectorizer` com stemming português, top 20 tokens mais frequentes, cálculo manual passo a passo da similaridade cosseno (para exercitar o conceito matemático do módulo Cap08), consulta ao recomendador com múltiplos casos (Cambuquira/MG, Uberlândia/MG, análogos interestaduais), consulta por tags customizadas, explicação de recomendação, e um heatmap de similaridade entre 12 municípios de referência. Para abrir:
+
+```powershell
+.\tasks.ps1 notebook
+```
 
 ### Novidades da Fase 1.D
 
