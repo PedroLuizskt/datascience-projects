@@ -256,10 +256,26 @@ def _resolver_periodo_ppm(ano: int | None) -> tuple[str, int | str]:
     return str(ano), ano
 
 
+# Tamanho default de cada lote de municípios enviados por request ao SIDRA.
+# Escolha empírica que balanceia dois limites: (i) o limite de 50k valores da
+# API SIDRA (500 × 10 rebanhos = 5000 valores, folgado); (ii) o limite de URL
+# de HTTP servers (500 × 7 chars + 499 vírgulas ≈ 4.000 chars, dentro do teto
+# universal de ~8 KB). Descoberto empiricamente que o chunking por UF adotado
+# na primeira versão da Fase 1.B corrompia silenciosamente MG (853 municípios,
+# URL ~7.7 KB) e SP (645 municípios, URL ~5.8 KB): o SIDRA aceitava a request
+# mas devolvia dados de OUTROS municípios, não os solicitados. O chunking por
+# tamanho fixo elimina essa heterogeneidade problemática.
+SIDRA_DEFAULT_CHUNK_SIZE: int = 500
+
+
 def _agrupar_municipios_por_uf(
     df_localidades: pd.DataFrame,
 ) -> dict[str, list[str]]:
     """Agrupa códigos IBGE de municípios por sigla da UF.
+
+    Mantida na base de código como utilitário auxiliar (não é mais usada
+    pelo pipeline principal de download da PPM, que agora fatia por
+    tamanho fixo em vez de por UF; ver :func:`_dividir_em_chunks`).
 
     A saída é ordenada alfabeticamente por sigla (AC, AL, AM, ..., TO)
     para gerar logs previsíveis. Municípios sem UF associada (não deveria
@@ -286,23 +302,126 @@ def _agrupar_municipios_por_uf(
     return resultado
 
 
+def _dividir_em_chunks(
+    codigos: list[str],
+    chunk_size: int = SIDRA_DEFAULT_CHUNK_SIZE,
+) -> list[list[str]]:
+    """Divide uma lista de códigos em sub-listas de tamanho fixo.
+
+    O último chunk pode ser menor que ``chunk_size``. Preserva a ordem
+    original da lista.
+
+    Parameters
+    ----------
+    codigos : list of str
+        Lista completa de códigos IBGE (ex.: todos os municípios do Brasil).
+    chunk_size : int
+        Máximo de códigos por chunk.
+
+    Returns
+    -------
+    list of list of str
+        Ex.: para 5571 códigos e chunk_size=500, retorna 12 chunks
+        (11 de 500 + 1 de 71).
+    """
+    if chunk_size <= 0:
+        raise ValueError(f"chunk_size deve ser positivo, recebido {chunk_size}")
+    return [codigos[i : i + chunk_size] for i in range(0, len(codigos), chunk_size)]
+
+
+def _validar_cobertura_ppm(
+    df: pd.DataFrame,
+    municipios_solicitados: set[str],
+    limite_aviso: float = 0.02,
+) -> None:
+    """Verifica que a resposta consolidada cobre os municípios solicitados.
+
+    Este check foi introduzido após descoberta de que o SIDRA pode aceitar
+    requests grandes mas retornar dados de municípios *diferentes* dos
+    solicitados (falha silenciosa por URL truncada). A cobertura real do
+    dado versus a esperada é a verificação de sanidade que pega esse tipo
+    de bug antes de contaminar as fases seguintes do pipeline.
+
+    Parameters
+    ----------
+    df : pandas.DataFrame
+        Consolidado de todos os chunks concatenados. Precisa ter coluna
+        ``D1C`` (código IBGE do município).
+    municipios_solicitados : set of str
+        Conjunto dos códigos que deveriam estar presentes.
+    limite_aviso : float
+        Fração de perda acima da qual um aviso é logado. Default 2%,
+        que corresponde a algumas dezenas de municípios em 5571 e ainda
+        pode ser lacuna legítima do IBGE para municípios pequenos.
+
+    Raises
+    ------
+    RuntimeError
+        Se a cobertura for catastroficamente baixa (< 50% dos solicitados),
+        indicando falha sistêmica que exige investigação antes de prosseguir.
+    """
+    if "D1C" not in df.columns:
+        logger.warning("[AVISO] Coluna D1C ausente, cobertura não validada")
+        return
+
+    municipios_recebidos = set(df["D1C"].astype(str).unique())
+    faltantes = municipios_solicitados - municipios_recebidos
+    fracao_faltante = len(faltantes) / max(len(municipios_solicitados), 1)
+
+    if fracao_faltante > 0.5:
+        raise RuntimeError(
+            f"Cobertura PPM catastroficamente baixa: só "
+            f"{len(municipios_recebidos)}/{len(municipios_solicitados)} "
+            f"municípios retornaram dados ({100*fracao_faltante:.1f}% faltantes). "
+            "Provável falha sistêmica na API SIDRA. Verifique o log de chunks "
+            "e considere reduzir SIDRA_DEFAULT_CHUNK_SIZE."
+        )
+
+    if fracao_faltante > limite_aviso:
+        amostra = sorted(faltantes)[:10]
+        logger.warning(
+            "[AVISO] Cobertura PPM: %d/%d municípios (%.1f%% faltantes). "
+            "Amostra de códigos faltantes: %s",
+            len(municipios_recebidos),
+            len(municipios_solicitados),
+            100 * fracao_faltante,
+            amostra,
+        )
+    else:
+        logger.info(
+            "[OK] Cobertura PPM: %d/%d municípios (%.1f%% faltantes)",
+            len(municipios_recebidos),
+            len(municipios_solicitados),
+            100 * fracao_faltante,
+        )
+
+
 def download_ppm_efetivo_rebanhos(
     ano: int | None = None,
     force: bool = False,
     sidra_client: Any | None = None,
     show_progress: bool | None = None,
+    chunk_size: int = SIDRA_DEFAULT_CHUNK_SIZE,
 ) -> pd.DataFrame:
     """Baixa a tabela 3939 (PPM/SIDRA) para todos os municípios brasileiros.
 
-    O download é feito em 27 lotes, um por Unidade da Federação, para
-    contornar o limite de 50.000 valores por request da API SIDRA. Os
-    resultados são concatenados em um único DataFrame antes da persistência
-    em disco.
+    O download é feito em lotes de :data:`SIDRA_DEFAULT_CHUNK_SIZE` municípios
+    (default 500), para contornar dois limites simultâneos da API SIDRA:
+    o de 50.000 valores por request (descoberto empiricamente na Fase 1.B)
+    e o de tamanho de URL (descoberto empiricamente após bug em MG e SP na
+    versão inicial que fatiava por UF). O chunking por tamanho fixo garante
+    URLs uniformes e pequenas (~4 KB), abaixo do teto universal HTTP.
+
+    Após concatenar todos os chunks, é executada uma validação de cobertura
+    que compara municípios solicitados vs recebidos. Se a perda for
+    catastrófica (>50%), uma exceção interrompe o pipeline; se for
+    moderada (>2%), um aviso é logado. Isso protege contra falhas
+    silenciosas da API que retorna dados sem erro mas com cobertura errada.
 
     Depende de que ``download_localidades()`` já tenha sido executado, pois
-    consulta o Parquet das localidades para saber quais códigos IBGE mandar
-    em cada lote. Se as localidades ainda não estiverem em disco, esta
-    função as baixa automaticamente antes de prosseguir.
+    consulta o Parquet das localidades para saber quais códigos IBGE mandar.
+    Se as localidades ainda não estiverem em disco, esta função as baixa
+    automaticamente antes de prosseguir.
 
     Parameters
     ----------
@@ -318,19 +437,23 @@ def download_ppm_efetivo_rebanhos(
         Se ``True``, mostra barra de progresso via tqdm. Se ``None``
         (default), desabilita quando um ``sidra_client`` foi injetado
         (indicativo de teste) e habilita caso contrário.
+    chunk_size : int
+        Máximo de municípios por request SIDRA. Default 500 (validado
+        empiricamente). Reduza se houver problemas de URL grande ou aumente
+        se souber que sua rede aguenta URLs maiores.
 
     Returns
     -------
     pandas.DataFrame
         DataFrame em formato long conforme retornado pelo SIDRA, com o
-        cabeçalho descritivo removido (``header='n'``) e todas as UFs
-        concatenadas.
+        cabeçalho descritivo removido (``header='n'``) e todos os chunks
+        concatenados.
 
     Raises
     ------
     RuntimeError
-        Se nenhuma UF conseguir retornar dados, ou se o SIDRA falhar
-        de forma persistente após retries internos.
+        Se nenhum chunk retornar dados, ou se a cobertura pós-download
+        for catastroficamente baixa (<50% dos municípios solicitados).
     """
     config.ensure_directories()
 
@@ -347,7 +470,7 @@ def download_ppm_efetivo_rebanhos(
         )
         return pd.read_parquet(raw_path)
 
-    # Garante que localidades está em disco (necessária para chunking por UF)
+    # Garante que localidades está em disco (necessária para chunking)
     if not get_localidades_interim_path().exists():
         logger.info(
             "[INFO] Localidades ausentes em disco. "
@@ -356,12 +479,24 @@ def download_ppm_efetivo_rebanhos(
         download_localidades()
 
     df_loc = load_localidades()
-    municipios_por_uf = _agrupar_municipios_por_uf(df_loc)
+    todos_codigos = (
+        df_loc["id_municipio"]
+        .dropna()
+        .astype("int64")
+        .astype(str)
+        .tolist()
+    )
+    chunks = _dividir_em_chunks(todos_codigos, chunk_size=chunk_size)
+
     logger.info(
-        "[INFO] Fatiando download PPM em %d lotes (um por UF) para "
-        "respeitar o limite de %d valores/request da API SIDRA.",
-        len(municipios_por_uf),
+        "[INFO] Fatiando download PPM em %d lotes de até %d municípios "
+        "(total %d municípios). Limites SIDRA: %d valores/request; "
+        "URL estimada por chunk: ~%d chars.",
+        len(chunks),
+        chunk_size,
+        len(todos_codigos),
         SIDRA_MAX_VALORES_POR_REQUEST,
+        chunk_size * 8,
     )
 
     client = sidra_client if sidra_client is not None else sidrapy
@@ -370,19 +505,20 @@ def download_ppm_efetivo_rebanhos(
         show_progress = sidra_client is None
 
     partes: list[pd.DataFrame] = []
-    ufs_com_falha: list[str] = []
+    chunks_com_falha: list[int] = []
 
     iterator = tqdm(
-        municipios_por_uf.items(),
-        desc="Baixando PPM por UF",
-        unit="UF",
+        enumerate(chunks, start=1),
+        total=len(chunks),
+        desc="Baixando PPM",
+        unit="chunk",
         disable=not show_progress,
     )
 
-    for sigla, codigos in iterator:
-        codigos_csv = ",".join(codigos)
+    for i, chunk in iterator:
+        codigos_csv = ",".join(chunk)
         try:
-            df_uf = client.get_table(
+            df_chunk = client.get_table(
                 table_code=config.PPM_TABLE_CODE,
                 territorial_level=config.SIDRA_TERRITORIAL_LEVEL_MUNICIPIO,
                 ibge_territorial_code=codigos_csv,
@@ -394,43 +530,49 @@ def download_ppm_efetivo_rebanhos(
             )
         except Exception as e:  # noqa: BLE001
             logger.warning(
-                "[AVISO] Falha ao baixar UF %s (%d municípios): %s",
-                sigla,
-                len(codigos),
+                "[AVISO] Falha ao baixar chunk %d/%d (%d municípios): %s",
+                i,
+                len(chunks),
+                len(chunk),
                 e,
             )
-            ufs_com_falha.append(sigla)
+            chunks_com_falha.append(i)
             continue
 
-        if df_uf is None or df_uf.empty:
-            logger.warning("[AVISO] SIDRA retornou vazio para UF %s", sigla)
-            ufs_com_falha.append(sigla)
+        if df_chunk is None or df_chunk.empty:
+            logger.warning(
+                "[AVISO] SIDRA retornou vazio para chunk %d/%d", i, len(chunks)
+            )
+            chunks_com_falha.append(i)
             continue
 
-        partes.append(df_uf)
+        partes.append(df_chunk)
         logger.debug(
-            "[OK] UF %s: %d linhas recebidas (%d municípios × rebanhos)",
-            sigla,
-            len(df_uf),
-            len(codigos),
+            "[OK] Chunk %d/%d: %d linhas recebidas (%d municípios solicitados)",
+            i,
+            len(chunks),
+            len(df_chunk),
+            len(chunk),
         )
 
     if not partes:
         raise RuntimeError(
-            "Nenhuma UF retornou dados. Verifique conectividade e "
-            "disponibilidade da API SIDRA. UFs testadas: "
-            f"{list(municipios_por_uf.keys())}"
+            f"Nenhum dos {len(chunks)} chunks retornou dados. "
+            "Verifique conectividade e disponibilidade da API SIDRA."
         )
 
     df = pd.concat(partes, ignore_index=True)
     logger.info(
-        "[OK] PPM consolidada: %d linhas de %d UFs bem-sucedidas "
+        "[INFO] PPM consolidada: %d linhas de %d chunks bem-sucedidos "
         "(%d falhas: %s)",
         len(df),
-        len(municipios_por_uf) - len(ufs_com_falha),
-        len(ufs_com_falha),
-        ufs_com_falha or "nenhuma",
+        len(chunks) - len(chunks_com_falha),
+        len(chunks_com_falha),
+        chunks_com_falha or "nenhuma",
     )
+
+    # Validação crítica de cobertura para pegar falhas silenciosas do SIDRA
+    _validar_cobertura_ppm(df, set(todos_codigos))
 
     df.to_parquet(raw_path, index=False)
     logger.info("[IO] Parquet salvo em %s", raw_path)

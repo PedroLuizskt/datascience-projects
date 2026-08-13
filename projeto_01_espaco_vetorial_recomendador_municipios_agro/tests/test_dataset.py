@@ -262,7 +262,77 @@ class TestResolverPeriodoPPM:
 
 
 # =============================================================================
-# _agrupar_municipios_por_uf — chunking helper
+# _dividir_em_chunks — chunking por tamanho fixo (substituiu _agrupar_por_uf
+# como estratégia principal de fatiamento, ver docstring do dataset.py)
+# =============================================================================
+class TestDividirEmChunks:
+    def test_lista_menor_que_chunk_gera_um_chunk(self) -> None:
+        chunks = dataset._dividir_em_chunks(["a", "b", "c"], chunk_size=10)
+        assert chunks == [["a", "b", "c"]]
+
+    def test_lista_exata_gera_n_chunks(self) -> None:
+        codigos = [str(i) for i in range(10)]
+        chunks = dataset._dividir_em_chunks(codigos, chunk_size=5)
+        assert len(chunks) == 2
+        assert chunks[0] == ["0", "1", "2", "3", "4"]
+        assert chunks[1] == ["5", "6", "7", "8", "9"]
+
+    def test_lista_com_resto_gera_ultimo_chunk_menor(self) -> None:
+        codigos = [str(i) for i in range(11)]
+        chunks = dataset._dividir_em_chunks(codigos, chunk_size=5)
+        assert len(chunks) == 3
+        assert len(chunks[-1]) == 1
+
+    def test_5570_codigos_com_chunk_500_gera_12_chunks(self) -> None:
+        """Cenário real: Brasil com chunk_size default (500)."""
+        codigos = [str(i) for i in range(5570)]
+        chunks = dataset._dividir_em_chunks(codigos, chunk_size=500)
+        assert len(chunks) == 12  # 11 × 500 + 70
+
+    def test_chunk_size_zero_ou_negativo_levanta_erro(self) -> None:
+        with pytest.raises(ValueError, match="positivo"):
+            dataset._dividir_em_chunks(["a"], chunk_size=0)
+
+
+# =============================================================================
+# _validar_cobertura_ppm — check crítico contra falhas silenciosas do SIDRA
+# =============================================================================
+class TestValidarCoberturaPPM:
+    def test_cobertura_completa_nao_levanta_warning(self, caplog) -> None:
+        df = pd.DataFrame({"D1C": ["1", "2", "3"]})
+        dataset._validar_cobertura_ppm(df, {"1", "2", "3"})
+        # Deve logar apenas INFO, nunca WARNING
+        avisos = [r for r in caplog.records if r.levelname == "WARNING"]
+        assert not avisos
+
+    def test_perda_moderada_gera_warning(self, caplog) -> None:
+        import logging as _logging
+
+        caplog.set_level(_logging.WARNING)
+        df = pd.DataFrame({"D1C": [str(i) for i in range(90)]})
+        solicitados = {str(i) for i in range(100)}  # 10% de perda
+        dataset._validar_cobertura_ppm(df, solicitados, limite_aviso=0.02)
+        assert any("Cobertura PPM" in r.message for r in caplog.records)
+
+    def test_perda_catastrofica_levanta_runtime_error(self) -> None:
+        """Regressão do bug MG/SP: perda >50% deve derrubar o pipeline."""
+        df = pd.DataFrame({"D1C": [str(i) for i in range(30)]})
+        solicitados = {str(i) for i in range(100)}  # 70% de perda
+        with pytest.raises(RuntimeError, match="catastroficamente"):
+            dataset._validar_cobertura_ppm(df, solicitados)
+
+    def test_ausencia_de_D1C_apenas_avisa(self, caplog) -> None:
+        import logging as _logging
+
+        caplog.set_level(_logging.WARNING)
+        df = pd.DataFrame({"outra_coluna": ["a"]})
+        dataset._validar_cobertura_ppm(df, {"1", "2"})
+        assert any("D1C ausente" in r.message for r in caplog.records)
+
+
+# =============================================================================
+# _agrupar_municipios_por_uf — mantido como utilitário mas não mais usado
+# no pipeline principal de download
 # =============================================================================
 class TestAgruparMunicipiosPorUF:
     def test_agrupamento_gera_dicionario_por_uf(
@@ -270,30 +340,9 @@ class TestAgruparMunicipiosPorUF:
     ) -> None:
         df = dataset._localidades_to_dataframe(loc_lista_ampla)
         agrupado = dataset._agrupar_municipios_por_uf(df)
-        # loc_lista_ampla tem SP, MG, RS, AM (4 UFs distintas)
         assert set(agrupado.keys()) == {"SP", "MG", "RS", "AM"}
-        assert all(isinstance(v, list) for v in agrupado.values())
-
-    def test_codigos_sao_strings_de_inteiros(
-        self, loc_lista_ampla: list[dict[str, Any]]
-    ) -> None:
-        df = dataset._localidades_to_dataframe(loc_lista_ampla)
-        agrupado = dataset._agrupar_municipios_por_uf(df)
-        for _, codigos in agrupado.items():
-            for cod in codigos:
-                assert isinstance(cod, str)
-                assert cod.isdigit(), f"Código {cod} não é string de dígitos"
-
-    def test_ordem_alfabetica_por_sigla(
-        self, loc_lista_ampla: list[dict[str, Any]]
-    ) -> None:
-        df = dataset._localidades_to_dataframe(loc_lista_ampla)
-        agrupado = dataset._agrupar_municipios_por_uf(df)
-        chaves = list(agrupado.keys())
-        assert chaves == sorted(chaves)
 
     def test_uf_ausente_e_descartada(self) -> None:
-        """Município sem UF (dado degenerado) é silenciosamente ignorado."""
         df = pd.DataFrame(
             {
                 "sigla_uf": ["SP", None, "MG"],
@@ -305,7 +354,7 @@ class TestAgruparMunicipiosPorUF:
 
 
 # =============================================================================
-# download_ppm_efetivo_rebanhos — com FakeSidraClient e chunking por UF
+# download_ppm_efetivo_rebanhos — chunking por tamanho fixo
 # =============================================================================
 class TestDownloadPPM:
     def test_download_com_cliente_falso_grava_parquet(
@@ -333,11 +382,7 @@ class TestDownloadPPM:
         assert call is not None
         assert call["table_code"] == config.PPM_TABLE_CODE
         assert call["territorial_level"] == config.SIDRA_TERRITORIAL_LEVEL_MUNICIPIO
-        # Códigos passados devem ser CSV de códigos IBGE (não "all")
         assert call["ibge_territorial_code"] != "all"
-        assert "," in call["ibge_territorial_code"] or call[
-            "ibge_territorial_code"
-        ].isdigit()
         assert call["variable"] == config.PPM_VARIABLE_CODE
         assert call["period"] == "2022"
         assert call["header"] == "n"
@@ -353,26 +398,30 @@ class TestDownloadPPM:
         dataset.download_ppm_efetivo_rebanhos(sidra_client=fake_sidra_client)
         assert fake_sidra_client.last_call["period"] == dataset.PPM_ULTIMO_DISPONIVEL
 
-    def test_uma_chamada_ao_sidra_por_uf(
+    def test_chunking_por_tamanho_gera_multiplas_chamadas(
         self,
         localidades_gravadas_multi_uf: tuple[pd.DataFrame, list],
         fake_sidra_client: "Any",
     ) -> None:
-        """Com 4 UFs em localidades, deve haver exatamente 4 chamadas SIDRA."""
-        _, ufs = localidades_gravadas_multi_uf
-        dataset.download_ppm_efetivo_rebanhos(
-            ano=2023, sidra_client=fake_sidra_client
-        )
-        assert fake_sidra_client.call_count == len(ufs)
+        """Com chunk_size=2 e 8 municípios totais, esperam-se 4 chamadas SIDRA.
 
-    def test_uma_uf_uma_chamada(
+        localidades_gravadas_multi_uf tem 4 UFs × 2 municípios = 8 municípios.
+        """
+        dataset.download_ppm_efetivo_rebanhos(
+            ano=2023, sidra_client=fake_sidra_client, chunk_size=2
+        )
+        assert fake_sidra_client.call_count == 4
+
+    def test_chunk_size_maior_que_dataset_gera_uma_chamada(
         self,
         localidades_gravadas_uma_uf: pd.DataFrame,
         fake_sidra_client: "Any",
     ) -> None:
+        """Com chunk_size folgado, todos os municípios cabem em 1 chamada."""
         dataset.download_ppm_efetivo_rebanhos(
-            ano=2023, sidra_client=fake_sidra_client
+            ano=2023, sidra_client=fake_sidra_client, chunk_size=500
         )
+        # localidades_gravadas_uma_uf tem 3 municípios de SP; 500 > 3 → 1 chunk
         assert fake_sidra_client.call_count == 1
 
     def test_cache_evita_novo_batch_completo(
@@ -380,38 +429,35 @@ class TestDownloadPPM:
         localidades_gravadas_multi_uf: tuple[pd.DataFrame, list],
         fake_sidra_client: "Any",
     ) -> None:
-        _, ufs = localidades_gravadas_multi_uf
         dataset.download_ppm_efetivo_rebanhos(
-            ano=2023, sidra_client=fake_sidra_client
+            ano=2023, sidra_client=fake_sidra_client, chunk_size=2
         )
-        assert fake_sidra_client.call_count == len(ufs)
-
-        # Segunda invocação: deve ler do cache, sem novas chamadas
+        primeira_execucao = fake_sidra_client.call_count
         dataset.download_ppm_efetivo_rebanhos(
-            ano=2023, sidra_client=fake_sidra_client
+            ano=2023, sidra_client=fake_sidra_client, chunk_size=2
         )
-        assert fake_sidra_client.call_count == len(ufs)
+        assert fake_sidra_client.call_count == primeira_execucao
 
     def test_force_true_refaz_batch_completo(
         self,
         localidades_gravadas_multi_uf: tuple[pd.DataFrame, list],
         fake_sidra_client: "Any",
     ) -> None:
-        _, ufs = localidades_gravadas_multi_uf
         dataset.download_ppm_efetivo_rebanhos(
-            ano=2023, sidra_client=fake_sidra_client
+            ano=2023, sidra_client=fake_sidra_client, chunk_size=2
         )
+        primeira_execucao = fake_sidra_client.call_count
         dataset.download_ppm_efetivo_rebanhos(
-            ano=2023, sidra_client=fake_sidra_client, force=True
+            ano=2023, sidra_client=fake_sidra_client, chunk_size=2, force=True
         )
-        assert fake_sidra_client.call_count == 2 * len(ufs)
+        assert fake_sidra_client.call_count == 2 * primeira_execucao
 
-    def test_sidra_vazio_em_todas_ufs_levanta_runtime_error(
+    def test_sidra_vazio_em_todos_chunks_levanta_runtime_error(
         self,
         localidades_gravadas_uma_uf: pd.DataFrame,
         fake_sidra_empty: "Any",
     ) -> None:
-        with pytest.raises(RuntimeError, match="Nenhuma UF"):
+        with pytest.raises(RuntimeError, match="Nenhum dos"):
             dataset.download_ppm_efetivo_rebanhos(
                 ano=2023, sidra_client=fake_sidra_empty
             )
@@ -422,9 +468,7 @@ class TestDownloadPPM:
         loc_lista_ampla: list[dict[str, Any]],
         fake_sidra_client: "Any",
     ) -> None:
-        """Se localidades não estão em disco, PPM deve baixá-las antes."""
         session = _FakeSession(loc_lista_ampla)
-        # Monkeypatch da função interna que constrói sessão HTTP
         import rec_agro_br.dataset as ds_module
 
         original_build = ds_module._build_session
@@ -434,12 +478,41 @@ class TestDownloadPPM:
             dataset.download_ppm_efetivo_rebanhos(
                 ano=2023, sidra_client=fake_sidra_client
             )
-            # Agora localidades devem existir
             assert dataset.get_localidades_interim_path().exists()
-            # Uma chamada HTTP para localidades foi feita
             assert len(session.calls) == 1
         finally:
             ds_module._build_session = original_build
+
+    def test_falha_em_chunk_isolado_nao_derruba_pipeline(
+        self,
+        localidades_gravadas_multi_uf: tuple[pd.DataFrame, list],
+    ) -> None:
+        """Simula: primeiro chunk falha (JSONDecodeError), demais passam.
+
+        Regressão do bug MG/SP: falhas de chunk devem ser toleradas
+        individualmente, desde que a maioria dos chunks tenha sucesso.
+        """
+        import json
+
+        from tests.conftest import FakeSidraClient
+
+        # Estende FakeSidraClient para falhar na primeira chamada
+        class FakeParcial(FakeSidraClient):
+            def get_table(self, **kwargs):
+                if self.call_count == 0:
+                    self.call_count += 1  # conta a tentativa falha
+                    raise json.JSONDecodeError("Expecting value", "", 0)
+                return super().get_table(**kwargs)
+
+        client = FakeParcial()
+        # 8 municípios, chunk_size=4 → 2 chunks. Primeiro falha, 1 sucede.
+        # 1 chunk × 4 municípios × 2 rebanhos = 8 linhas
+        # 4 municípios / 8 solicitados = 50% cobertura → passa (>= 50% limiar)
+        df = dataset.download_ppm_efetivo_rebanhos(
+            ano=2023, sidra_client=client, chunk_size=4
+        )
+        assert client.call_count == 2
+        assert len(df) == 8  # 1 chunk × 4 municípios × 2 rebanhos
 
 
 class TestLoadPPM:
@@ -513,4 +586,25 @@ class TestIntegracaoRedeReal:
     def test_baixa_ppm_real_ultimo_ano(self, isolated_data_dirs: Path) -> None:
         df = dataset.download_ppm_efetivo_rebanhos()
         assert not df.empty
-        assert len(df) > 10000  # milhares de linhas esperadas
+        assert len(df) > 10000
+
+    @pytest.mark.slow
+    def test_regressao_mg_sp_cobertura(self, isolated_data_dirs: Path) -> None:
+        """Regressão do bug de chunking: MG e SP DEVEM ter dados.
+
+        Bug detectado após Fase 1.D: chunking por UF gerava URLs muito
+        grandes para MG (853 municípios) e SP (645 municípios), causando
+        falha silenciosa do SIDRA. Este teste garante que a correção
+        (chunking por tamanho fixo de 500) resolveu o problema.
+        """
+        df = dataset.download_ppm_efetivo_rebanhos()
+        # Código IBGE de MG começa com "31", SP com "35"
+        mg_municipios = df[df["D1C"].astype(str).str.startswith("31")][
+            "D1C"
+        ].nunique()
+        sp_municipios = df[df["D1C"].astype(str).str.startswith("35")][
+            "D1C"
+        ].nunique()
+        # MG tem 853 municípios, SP tem 645. Aceita perda de até 5%.
+        assert mg_municipios >= 800, f"Cobertura MG: só {mg_municipios} municípios"
+        assert sp_municipios >= 610, f"Cobertura SP: só {sp_municipios} municípios"

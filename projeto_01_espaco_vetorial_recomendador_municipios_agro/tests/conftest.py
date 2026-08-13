@@ -138,51 +138,72 @@ def loc_lista_ampla(
 # =============================================================================
 # Fixtures do SIDRA / PPM
 # =============================================================================
-@pytest.fixture
-def sidra_ppm_dataframe_fake() -> pd.DataFrame:
-    """DataFrame que imita a resposta do sidrapy para a tabela 3939.
-
-    Estrutura equivalente ao que o sidrapy retorna com `header='n'` (sem
-    a linha descritiva). Duas cidades × dois tipos de rebanho.
-    """
-    return pd.DataFrame(
-        {
-            "NC": ["6", "6", "6", "6"],
-            "NN": ["Município"] * 4,
-            "MC": ["3550308", "3550308", "3111606", "3111606"],
-            "MN": ["São Paulo", "São Paulo", "Cambuquira", "Cambuquira"],
-            "V": ["100", "50", "1000", "200"],
-            "D1C": ["2023"] * 4,
-            "D1N": ["2023"] * 4,
-            "D2C": ["2670", "2680", "2670", "2680"],
-            "D2N": ["Bovino", "Suíno", "Bovino", "Suíno"],
-            "MU": ["Cabeças"] * 4,
-        }
-    )
-
-
 class FakeSidraClient:
     """Cliente falso do sidrapy usado nos testes.
 
-    Registra a última chamada em `last_call` para inspeção nos asserts,
-    e devolve um DataFrame fixo. Permite testar `download_ppm_efetivo_rebanhos`
-    sem tocar a rede.
+    Gera dinamicamente respostas plausíveis baseadas nos códigos IBGE
+    de município recebidos em `ibge_territorial_code`. Isso permite que
+    a validação de cobertura pós-download do dataset.py funcione
+    corretamente em testes: como os códigos retornados são exatamente
+    os solicitados, a cobertura é 100%.
+
+    Cada chamada é registrada em `last_call` para inspeção e o total de
+    chamadas em `call_count` — útil para validar o chunking.
     """
 
-    def __init__(self, dataframe: pd.DataFrame) -> None:
-        self._dataframe = dataframe
+    # Mapeamento fixo tipos de rebanho reproduzindo estrutura real do SIDRA
+    _REBANHOS_DEFAULT: tuple[tuple[str, str], ...] = (
+        ("2670", "Bovino"),
+        ("32794", "Suíno - total"),
+    )
+
+    def __init__(self, rebanhos: tuple[tuple[str, str], ...] | None = None) -> None:
+        self._rebanhos = rebanhos or self._REBANHOS_DEFAULT
         self.last_call: dict[str, Any] | None = None
         self.call_count: int = 0
 
     def get_table(self, **kwargs: Any) -> pd.DataFrame:
+        """Simula chamada SIDRA gerando DataFrame com os códigos solicitados.
+
+        Ecoa de volta os códigos passados em `ibge_territorial_code` (CSV
+        de códigos IBGE), gerando N linhas para cada município (uma por
+        tipo de rebanho em `_rebanhos`).
+        """
         self.last_call = kwargs
         self.call_count += 1
-        return self._dataframe.copy()
+
+        codigos_csv = kwargs.get("ibge_territorial_code", "")
+        codigos = [c.strip() for c in codigos_csv.split(",") if c.strip()]
+
+        if not codigos:
+            return pd.DataFrame()
+
+        linhas = []
+        for cod in codigos:
+            for tipo_cod, tipo_nome in self._rebanhos:
+                linhas.append(
+                    {
+                        "NC": "6",
+                        "NN": "Município",
+                        "MC": "24",
+                        "MN": "Cabeças",
+                        "V": "100",
+                        "D1C": cod,
+                        "D1N": f"Municipio {cod}",
+                        "D2C": "2024",
+                        "D2N": "2024",
+                        "D3C": "105",
+                        "D3N": "Efetivo dos rebanhos",
+                        "D4C": tipo_cod,
+                        "D4N": tipo_nome,
+                    }
+                )
+        return pd.DataFrame(linhas)
 
 
 @pytest.fixture
-def fake_sidra_client(sidra_ppm_dataframe_fake: pd.DataFrame) -> FakeSidraClient:
-    return FakeSidraClient(sidra_ppm_dataframe_fake)
+def fake_sidra_client() -> FakeSidraClient:
+    return FakeSidraClient()
 
 
 class FakeSidraEmpty:

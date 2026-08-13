@@ -37,6 +37,8 @@ function Show-Help {
     Write-Host "  download-ppm      Baixa PPM tabela 3939 da API SIDRA"
     Write-Host "  download-all      Baixa localidades + PPM"
     Write-Host "  build-features    Roda pipeline de feature engineering (features.py)"
+    Write-Host "  vectorize         Ajusta CountVectorizer e salva matriz esparsa"
+    Write-Host "  vectorize-no-stem Idem, mas sem stemming (para comparacao)"
     Write-Host "  clean             Remove __pycache__, .pytest_cache, .ruff_cache"
     Write-Host "  clean-data        Remove data/interim/* e data/processed/*"
 }
@@ -84,6 +86,14 @@ function Invoke-BuildFeatures {
     & $Python -m rec_agro_br.features
 }
 
+function Invoke-Vectorize {
+    & $Python -m rec_agro_br.vectorize
+}
+
+function Invoke-VectorizeNoStem {
+    & $Python -m rec_agro_br.vectorize --sem-stemming
+}
+
 function Invoke-Lint {
     & $Python -m ruff check src/ tests/
     & $Python -m ruff format --check src/ tests/
@@ -126,8 +136,10 @@ switch ($Task) {
     "download-loc"   { Invoke-DownloadLoc }
     "download-ppm"   { Invoke-DownloadPPM }
     "download-all"   { Invoke-DownloadAll }
-    "build-features" { Invoke-BuildFeatures }
-    "clean"          { Invoke-Clean }
+    "build-features"   { Invoke-BuildFeatures }
+    "vectorize"        { Invoke-Vectorize }
+    "vectorize-no-stem"{ Invoke-VectorizeNoStem }
+    "clean"            { Invoke-Clean }
     "clean-data"     { Invoke-CleanData }
     default {
         Write-Host "[ERRO] Alvo desconhecido: $Task"

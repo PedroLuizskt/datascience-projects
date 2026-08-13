@@ -100,10 +100,26 @@ O projeto está sendo construído em fases progressivas para permitir validaçã
 | 1.A | Estrutura, config, testes de sanidade | Concluída |
 | 1.B | Módulo `dataset.py` — download da API SIDRA e da API Localidades | Concluída |
 | 1.C | Módulo `features.py` — feature engineering e montagem das tags | Concluída |
-| 1.D | Módulos `vectorize.py` e `similarity.py` | A implementar |
+| 1.D | Módulos `vectorize.py` e `similarity.py` | Concluída |
 | 1.E | Módulo `recommender.py` e notebook principal | A implementar |
 | 1.F | Apostila didática completa | A implementar |
 | 1.G | Extensão de mestrado — validação espacial (Moran's I) | Opcional |
+
+### Novidades da Fase 1.D
+
+Dois novos módulos que implementam o coração matemático do sistema de recomendação content-based.
+
+O `vectorize.py` transforma o corpus de tags agropecuárias em uma matriz esparsa de features usando o `CountVectorizer` do scikit-learn. Ele traz uma adaptação linguística importante: usa o `RSLPStemmer` do NLTK (stemmer específico para português brasileiro) em vez do `PorterStemmer` (inglês) usado no projeto DSA original. O tokenizer é seletivo — stemmiza apenas tokens simples (`bovinocultura` → `bovinocultur`) e preserva intactos os tokens compostos por underscore (`sul_sudoeste_de_minas`, `especializado_em_bovinocultura`), evitando que identificadores geográficos ou categóricos semanticamente unitários sejam fragmentados. O vectorizer e a matriz esparsa são serializados em `data/processed/` para consumo pelas fases seguintes.
+
+O `similarity.py` fornece as três métricas fundamentais de comparação vetorial exercitadas no módulo Cap08: similaridade cosseno, distância euclidiana e distância Manhattan. Cada métrica tem duas implementações: uma vetorizada em lote via scikit-learn (para operações matriz × matriz, usada em produção) e outra manual didática em NumPy puro (para exercitar a fórmula matemática passo a passo, com docstrings que explicam a matemática por trás). Um par de funções `top_k_similares` e `top_k_mais_proximos` recupera os `k` vizinhos mais próximos considerando ordenação decrescente (similaridade) ou crescente (distância), com suporte a exclusão de índices para evitar que o município consultado apareça em sua própria lista de recomendações.
+
+Para gerar o vetorizador e a matriz de features:
+
+```powershell
+.\tasks.ps1 vectorize
+```
+
+Isso lê `data/processed/municipios_features.parquet`, ajusta o `CountVectorizer` (com stemming por default) e persiste `count_vectorizer.joblib` + `tags_matrix.npz` em `data/processed/`. Também imprime um resumo com os 20 tokens mais frequentes do corpus, o que é útil para debug e para a apostila didática.
 
 ### Novidades da Fase 1.C
 

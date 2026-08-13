@@ -15,7 +15,7 @@
 
 .PHONY: help setup test test-network test-all lint notebook \
         download-loc download-ppm download-all build-features \
-        clean clean-data
+        vectorize vectorize-no-stem clean clean-data
 
 # Detecção do sistema para escolher o python correto
 ifeq ($(OS),Windows_NT)
@@ -38,6 +38,8 @@ help:
 	@echo "  download-ppm      Baixa PPM tabela 3939 da API SIDRA"
 	@echo "  download-all      Baixa localidades + PPM"
 	@echo "  build-features    Roda pipeline de feature engineering (features.py)"
+	@echo "  vectorize         Ajusta CountVectorizer e salva matriz esparsa"
+	@echo "  vectorize-no-stem Idem, mas sem stemming (para comparacao)"
 	@echo "  clean             Remove __pycache__, .pytest_cache, .ruff_cache"
 	@echo "  clean-data        Remove data/interim/* e data/processed/* (preserva raw)"
 
@@ -70,6 +72,12 @@ download-all:
 
 build-features:
 	$(PYTHON) -m rec_agro_br.features
+
+vectorize:
+	$(PYTHON) -m rec_agro_br.vectorize
+
+vectorize-no-stem:
+	$(PYTHON) -m rec_agro_br.vectorize --sem-stemming
 
 lint:
 	$(PYTHON) -m ruff check src/ tests/
