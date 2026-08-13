@@ -82,6 +82,11 @@ logger = logging.getLogger(__name__)
 VECTORIZER_JOBLIB: str = "count_vectorizer.joblib"
 MATRIX_NPZ: str = "tags_matrix.npz"
 
+# Path canônico deste módulo, usado para resolver referências de função via
+# importlib. Ver notas em `build_vectorizer` e no bloco de correção ao final
+# das definições dos tokenizers para o mecanismo completo.
+_CANONICAL_MODULE_PATH: str = "rec_agro_br.vectorize"
+
 
 def get_vectorizer_path() -> Path:
     """Caminho canônico do vectorizer serializado."""
@@ -173,6 +178,27 @@ def tokenize_com_stemming(texto: str) -> list[str]:
 
 
 # =============================================================================
+# Robustez de pickle: forçar `__module__` canônico das funções tokenizer
+# =============================================================================
+# Complementa a resolução via ``importlib.import_module`` feita em
+# :func:`build_vectorizer`. As duas correções trabalham em conjunto:
+#
+# 1. Este bloco força ``tokenize_*.__module__ = 'rec_agro_br.vectorize'``,
+#    o que garante que quando as funções forem serializadas pelo pickle,
+#    a referência simbólica gravada seja o path canônico do pacote
+#    (não ``__main__``).
+#
+# 2. :func:`build_vectorizer` importa via ``importlib.import_module`` para
+#    garantir que a instância da função passada ao CountVectorizer seja
+#    exatamente a mesma que está em ``sys.modules['rec_agro_br.vectorize']``.
+#    Sem isso, ao rodar como ``python -m rec_agro_br.vectorize``, o pickle
+#    detectaria que a função de ``__main__`` é objeto Python distinto da
+#    versão canônica e falharia com ``PicklingError: it's not the same object``.
+tokenize_simples.__module__ = _CANONICAL_MODULE_PATH
+tokenize_com_stemming.__module__ = _CANONICAL_MODULE_PATH
+
+
+# =============================================================================
 # Construção do vectorizer
 # =============================================================================
 def build_vectorizer(
@@ -202,8 +228,29 @@ def build_vectorizer(
     -------
     CountVectorizer
         Vectorizer não ajustado, pronto para ``fit_transform``.
+
+    Notas de implementação (robustez de pickle)
+    -------------------------------------------
+    As funções tokenizer são resolvidas via ``importlib.import_module`` do
+    caminho canônico ``rec_agro_br.vectorize``, ao invés de usar as
+    referências locais deste módulo. Quando este arquivo é executado como
+    script (``python -m rec_agro_br.vectorize``), o Python cria duas
+    instâncias distintas do módulo em ``sys.modules``: uma em ``__main__``
+    e outra em ``rec_agro_br.vectorize``, cada uma com suas próprias
+    funções tokenizer (mesmo código, objetos Python distintos). Sem o
+    ``importlib.import_module`` explícito, o CountVectorizer receberia a
+    função da instância ``__main__``, e o pickle subsequente falharia com
+    ``PicklingError: it's not the same object`` ao tentar validar contra
+    a versão em ``rec_agro_br.vectorize``.
     """
-    tokenizer = tokenize_com_stemming if use_stemming else tokenize_simples
+    import importlib
+
+    canonical_module = importlib.import_module(_CANONICAL_MODULE_PATH)
+    tokenizer = (
+        canonical_module.tokenize_com_stemming
+        if use_stemming
+        else canonical_module.tokenize_simples
+    )
     return CountVectorizer(
         tokenizer=tokenizer,
         max_features=max_features,

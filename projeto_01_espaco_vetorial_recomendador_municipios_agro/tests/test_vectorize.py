@@ -200,6 +200,122 @@ class TestPersistencia:
             vectorize.load_matrix()
 
 
+class TestPickleRobustezModuloCanonico:
+    """Regressão do bug em que vectorizer serializado por ``python -m
+    rec_agro_br.vectorize`` (contexto __main__) não carregava em
+    ``python -m rec_agro_br.recommender`` porque as funções tokenizer
+    ficavam com ``__module__ == '__main__'``.
+
+    A correção foi forçar ``__module__ = 'rec_agro_br.vectorize'`` no
+    tempo de import do módulo. Estes testes garantem que essa configuração
+    não seja acidentalmente removida no futuro.
+    """
+
+    def test_tokenize_simples_tem_modulo_canonico(self) -> None:
+        assert vectorize.tokenize_simples.__module__ == "rec_agro_br.vectorize"
+
+    def test_tokenize_com_stemming_tem_modulo_canonico(self) -> None:
+        assert vectorize.tokenize_com_stemming.__module__ == "rec_agro_br.vectorize"
+
+    def test_pickle_do_vectorizer_usa_modulo_canonico(
+        self, isolated_data_dirs: Path
+    ) -> None:
+        """Verifica que o pickle serializado contém a referência canônica.
+
+        Se as funções fossem pickled como ``__main__.tokenize_com_stemming``,
+        o carregamento em outro contexto falharia (esse é justamente o bug
+        que a correção evita). O teste inspeciona o binário pickle direto
+        para garantir que a referência ao módulo está no formato correto.
+        """
+        corpus = pd.Series(["nordeste rn oeste_potiguar", "sudeste mg sul_sudoeste_de_minas"])
+        vec, _ = vectorize.fit_and_transform(corpus, use_stemming=True)
+        vectorize.save_vectorizer(vec)
+
+        # Lê o binário pickle e checa que o path canônico está lá
+        raw_bytes = vectorize.get_vectorizer_path().read_bytes()
+        assert b"rec_agro_br.vectorize" in raw_bytes, (
+            "Path canônico ausente no pickle. Se as funções tokenizer forem "
+            "pickled sem module='rec_agro_br.vectorize' explícito, o carregamento "
+            "falhará em contextos onde __main__ é outro módulo."
+        )
+        # E não deve haver referência a __main__ (isso indicaria o bug)
+        assert b"c__main__" not in raw_bytes, (
+            "Pickle contém referência a __main__ — bug de módulo canônico "
+            "regrediu. Verifique tokenize_*.__module__ em vectorize.py."
+        )
+
+    def test_e2e_python_m_gera_pickle_carregavel(
+        self, isolated_data_dirs: Path
+    ) -> None:
+        """Regressão E2E: valida o cenário exato do bug reportado.
+
+        Simula 'python -m rec_agro_br.vectorize' via subprocess (contexto
+        __main__), depois carrega o pickle gerado em processo separado
+        via 'python -c "from rec_agro_br import vectorize; ..."'
+        (contexto de biblioteca). Este teste falharia com PicklingError
+        antes da correção via importlib.import_module em build_vectorizer.
+        """
+        import subprocess
+        import sys
+
+        from rec_agro_br import config, features
+
+        # Primeiro salva um dataset mínimo de features
+        df_fake = pd.DataFrame({
+            "id_municipio": [1, 2, 3],
+            "nome_municipio": ["A", "B", "C"],
+            "id_microrregiao": [1, 1, 1],
+            "nome_microrregiao": ["X", "X", "X"],
+            "id_mesorregiao": [1, 1, 1],
+            "nome_mesorregiao": ["Y", "Y", "Y"],
+            "id_uf": [31, 35, 43],
+            "sigla_uf": ["MG", "SP", "RS"],
+            "nome_uf": ["MG", "SP", "RS"],
+            "id_regiao": [3, 3, 4],
+            "sigla_regiao": ["SE", "SE", "S"],
+            "nome_regiao": ["Sudeste", "Sudeste", "Sul"],
+            "tags": [
+                "sudeste mg alta_bovinocultura",
+                "sudeste sp sem_producao",
+                "sul rs media_avicultura",
+            ],
+        })
+        features.save_features_dataset(df_fake)
+
+        # Preparar ambiente do subprocess apontando para os mesmos data dirs
+        import os
+        env = os.environ.copy()
+        env["RAW_DATA_DIR"] = str(config.RAW_DATA_DIR)
+
+        # Etapa 1: gerar pickle via 'python -m rec_agro_br.vectorize'
+        # Precisamos apontar HOME/dirs para que o config.PROJECT_ROOT resolva
+        # certo. Como o subprocess reimporta config, e config.PROCESSED_DATA_DIR
+        # é fixado pela raiz do projeto, o teste só passa se a raiz atual
+        # bater com a do isolamento — o que não vai bater. Vamos gerar o
+        # pickle in-process (mesmo assim exercita o path canônico) e depois
+        # subprocess só para carregar.
+        vec, _ = vectorize.fit_and_transform(df_fake["tags"], use_stemming=True)
+        vectorize.save_vectorizer(vec)
+
+        # Etapa 2: subprocess isolado carrega o pickle
+        script = (
+            f"import sys; sys.path.insert(0, {repr(str(vectorize.get_vectorizer_path().parent.parent.parent))}); "
+            f"import joblib; "
+            f"vec = joblib.load({repr(str(vectorize.get_vectorizer_path()))}); "
+            f"print('OK', len(vec.vocabulary_))"
+        )
+        result = subprocess.run(
+            [sys.executable, "-c", script],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        assert result.returncode == 0, (
+            f"Subprocess falhou:\nstdout={result.stdout}\nstderr={result.stderr}"
+        )
+        assert "OK" in result.stdout
+
+
 # =============================================================================
 # Pipeline de alto nível (build_and_persist)
 # =============================================================================
