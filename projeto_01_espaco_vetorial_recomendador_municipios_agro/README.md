@@ -102,8 +102,18 @@ O projeto está sendo construído em fases progressivas para permitir validaçã
 | 1.C | Módulo `features.py` — feature engineering e montagem das tags | Concluída |
 | 1.D | Módulos `vectorize.py` e `similarity.py` | Concluída |
 | 1.E | Módulo `recommender.py` + notebook demonstrativo end-to-end | Concluída |
-| 1.F | Apostila didática completa | A implementar |
+| 1.F | Apostila didática completa (`docs/apostila/`) | Concluída |
 | 1.G | Extensão de mestrado — validação espacial (Moran's I) | Opcional |
+
+### Novidades da Fase 1.F
+
+Cinco sessões didáticas em `docs/apostila/` cobrem o núcleo conceitual do projeto (Sessões 01 a 05), mais uma sessão bônus (Sessão 06) que apresenta o roadmap para a extensão espacial de nível mestrado (Fase 1.G). Todas escritas no estilo "como se ensinasse" do repositório [estudos-observabilidade](https://github.com/PedroLuizskt/estudos-observabilidade): prosa didática entre trechos de código, diagramas Mermaid nos pontos-chave, exemplos empíricos com dados reais do dataset (Cambuquira/MG, Uberlândia/MG, Guaxupé/MG), fórmulas matemáticas em LaTeX, referências acadêmicas ao final. Sem emojis, tom acadêmico mas acessível.
+
+A **Sessão 01** firma o conceito de espaço vetorial $\mathbb{R}^v$ e explica por que representar itens como vetores viabiliza comparação matemática. A **Sessão 02** percorre o pipeline de feature engineering em cinco estágios (`clean_ppm` → `pivot_ppm_wide` → `merge_com_localidades` → `derive_*` → `build_tags`) e mostra como as tags são o análogo agropecuário dos campos textuais do projeto DSA original. A **Sessão 03** explica o modelo bag-of-words, o `CountVectorizer` do scikit-learn, o `RSLPStemmer` do NLTK para português, e a decisão de projeto de aplicar stemming seletivamente apenas aos tokens simples. A **Sessão 04** cobre as três métricas de comparação vetorial — cosseno, euclidiana e Manhattan — com suas implementações manuais didáticas e vetorizadas via sklearn. A **Sessão 05** amarra tudo mostrando como a classe `MunicipioRecommender` encapsula o pipeline em uma API amigável e como a função `explain` decompõe qualquer recomendação em fatores interpretáveis, usando como exemplo o par Uberlândia/MG × Uberaba/MG que compartilha 19 tokens de 20 possíveis.
+
+A **Sessão 06** é o roadmap opcional para nível mestrado: apresenta o índice de Moran (autocorrelação espacial global) como método para validar cientificamente se a similaridade agropecuária tem estrutura espacial coerente. Descreve as bibliotecas necessárias (geopandas, libpysal, esda), esboça o código, elenca hipóteses testáveis (municípios com "especializado_em_avicultura" formam clusters no Sul de Minas e Norte-Noroeste de SP?) e cuidados metodológicos (escolha da matriz de pesos, MAUP, correção para múltiplos testes). Execução na Fase 1.G quando as dependências geoespaciais forem viáveis no ambiente Windows.
+
+Para navegar a apostila, comece pelo [índice](docs/apostila/00_indice.md).
 
 ### Novidades da Fase 1.E
 
