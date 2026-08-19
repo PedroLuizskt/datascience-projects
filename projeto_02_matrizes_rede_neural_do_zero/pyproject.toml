@@ -1,0 +1,98 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "rna_matrizes"
+version = "0.1.0"
+description = "Adaptação didática do Projeto 2 da pós-graduação DSA — Rede Neural Artificial via Operações com Matrizes"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "MIT"
+authors = [
+    { name = "Pedro Luiz Rocha Vaz de Melo" },
+]
+keywords = [
+    "machine-learning",
+    "neural-network",
+    "logistic-regression",
+    "gradient-descent",
+    "numpy",
+    "educational",
+    "portfolio",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Education",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Natural Language :: Portuguese (Brazilian)",
+]
+
+dependencies = [
+    "numpy>=1.26",
+    "pandas>=2.1",
+    "scikit-learn>=1.4",
+    "python-dotenv>=1.0",
+    "requests>=2.31",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-cov>=5.0",
+    "ruff>=0.4",
+]
+
+notebook = [
+    "jupyterlab>=4.0",
+    "matplotlib>=3.8",
+    "seaborn>=0.13",
+]
+
+[project.urls]
+Repository = "https://github.com/PedroLuizskt/datascience-projects"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/rna_matrizes"]
+
+# =============================================================================
+# Pytest
+# =============================================================================
+[tool.pytest.ini_options]
+minversion = "8.0"
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = [
+    "-ra",
+    "--strict-markers",
+    "--strict-config",
+    "-m", "not slow and not network",
+    "--cov=src/rna_matrizes",
+    "--cov-report=term-missing",
+    "--cov-report=html:reports/coverage",
+]
+markers = [
+    "slow: testes lentos (excluidos por default)",
+    "network: testes que requerem conectividade (excluidos por default)",
+]
+
+# =============================================================================
+# Ruff
+# =============================================================================
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "N"]
+ignore = ["E501"]  # line-too-long — controlado pelo formatter
+
+[tool.ruff.format]
+quote-style = "double"
